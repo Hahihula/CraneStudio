@@ -1,0 +1,29 @@
+[package]
+name = "cranestudio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "cranestudio"
+path = "src/main.rs"
+
+[dependencies]
+studio-core = { workspace = true }
+studio-supervisor = { workspace = true }
+studio-gateway = { workspace = true }
+studio-tui = { workspace = true }
+crane-serve = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+clap = { workspace = true }
+
+[features]
+default = []
+cuda = ["crane-serve/cuda"]
+metal = ["crane-serve/metal"]
+accelerate = ["crane-serve/accelerate"]
+rocm = ["crane-serve/rocm"]
+cudnn = ["crane-serve/cudnn"]
+mkl = ["crane-serve/mkl"]

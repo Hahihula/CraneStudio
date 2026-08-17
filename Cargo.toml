@@ -1,6 +1,49 @@
-[package]
-name = "CraneStudio"
+[workspace]
+resolver = "2"
+members = [
+    "crates/studio-core",
+    "crates/studio-supervisor",
+    "crates/studio-gateway",
+    "crates/studio-tui",
+    "crates/cranestudio",
+]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+repository = "https://github.com/hahihula/CraneStudio"
 
-[dependencies]
+[workspace.dependencies]
+# lucasjinreal/Crane main @ 2026-08-17. Includes:
+#   PR  #99 — Qwen 3.5 GGUF long-prompt quant fix
+#   PR #100 — Qwen 3.6 / 3.8 (27B) support
+#   PR #102 — OpenAI tool calling in crane-serve
+crane-serve = { git = "https://github.com/lucasjinreal/Crane", rev = "4242e9c3d85c030341aac562b07c650a0fe3e5f6" }
+crane-core = { git = "https://github.com/lucasjinreal/Crane", rev = "4242e9c3d85c030341aac562b07c650a0fe3e5f6" }
+
+anyhow = "1.0"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+studio-core = { path = "crates/studio-core" }
+studio-supervisor = { path = "crates/studio-supervisor" }
+studio-gateway = { path = "crates/studio-gateway" }
+studio-tui = { path = "crates/studio-tui" }
+
+# TEMPORARY — see PLAN.md §3.4 discrepancy note (added 2026-08-17). The pinned
+# rev above fails to compile: crane-core's muscriptor conditioner mixes
+# &mut Tensor and &Tensor in one array literal passed to Tensor::cat, which
+# candle-core 0.11's array-literal coercion rejects. Fix is prepared at
+# /home/hahihula/muscriptor-cat-fix.patch and applied on a local branch at
+# /home/hahihula/mywork/crane-local-patched (commit 083f2c1), pending push to
+# lucasjinreal/Crane by hahihula. Remove this [patch] and re-pin the [rev]
+# above to the commit that lands upstream — treat its removal as an M10
+# release gate per §11.0.
+[patch."https://github.com/lucasjinreal/Crane"]
+crane-serve = { path = "/home/hahihula/mywork/crane-local-patched/crane-serve" }
+crane-core = { path = "/home/hahihula/mywork/crane-local-patched/crane-core" }

@@ -1,0 +1,13 @@
+[package]
+name = "studio-supervisor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "studio_supervisor"
+path = "src/lib.rs"
+
+[dependencies]
+studio-core = { workspace = true }

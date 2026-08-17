@@ -441,7 +441,7 @@ the tree.**
                              │                 │ spawns
                     ┌────────▼─────────────────▼──────────────┐
                     │ cranestudio __serve -m ... -p 41xxx     │  ← re-exec of
-                    │   (== crane_serve::run_server)          │    the SAME binary
+                    │   (== crane_serve::run)                 │    the SAME binary
                     ├─────────────────────────────────────────┤
                     │ cranestudio __serve -m ... -p 41xxx     │
                     └─────────────────────────────────────────┘
@@ -449,7 +449,7 @@ the tree.**
 
 **The single-binary trick:** `cranestudio` links `crane-serve` as a library. When
 invoked as `cranestudio __serve <crane-serve args...>`, it parses
-`crane_serve::Args` and calls `crane_serve::run_server` — i.e. it *is*
+`crane_serve::Args` and calls `crane_serve::run` — i.e. it *is*
 crane-serve. The daemon spawns children by re-executing
 `std::env::current_exe()` with the `__serve` subcommand.
 
@@ -585,8 +585,27 @@ crane-serve = { git = "https://github.com/lucasjinreal/Crane", rev = "4242e9c3d8
 crane-core  = { git = "https://github.com/lucasjinreal/Crane", rev = "4242e9c3d85c030341aac562b07c650a0fe3e5f6" }
 ```
 
-**No `[patch]` section is needed. CraneStudio has no unmet upstream
-dependencies** — every capability v1 requires is on upstream `main`.
+**No `[patch]` section is needed for capability reasons — every capability v1
+requires is on upstream `main`.** However, as of 2026-08-17 the pinned rev
+**does not compile**: `crane-core/src/models/muscriptor/conditioner.rs` mixes
+`&mut Tensor` and `&Tensor` in one array literal passed to `Tensor::cat`
+(`*mel = Tensor::cat(&[mel, &pad_mel], 0)?;` and the equivalent for `mask`),
+which candle-core 0.11's array-literal coercion rejects. Verified: this is on
+`origin/main` itself (our pin *is* `origin/main`), landed in `245b6bb1 "added
+muscriptor support"` (2026-08-15, author hahihula), and blocks the whole
+crate — muscriptor is an unconditional module, not feature-gated. Confirmed
+unrelated to the model families CraneStudio drives.
+
+Fix is a one-line reborrow (`&*mel`, `&*mask`) in both spots; verified with
+`cargo check -p crane-core --features cuda` and `cargo fmt --check`. Prepared
+as a patch at `/home/hahihula/muscriptor-cat-fix.patch` and applied on a local
+branch (`fix/muscriptor-cat-mut-borrow`, commit `083f2c1`) at
+`/home/hahihula/mywork/crane-local-patched`, pending push to
+`lucasjinreal/Crane` by hahihula (who has direct write access, per the
+`245b6bb1` commit). Until that lands, CraneStudio's workspace `Cargo.toml`
+carries a temporary `[patch]` pointing at that local clone — remove it and
+re-pin `rev` to the commit that lands upstream once pushed; per §11.0, treat
+that removal as an M10 release gate.
 
 Bump this pin deliberately, never automatically, and re-run the estimator's
 calibration tests (§7.3) after every bump — a change in Crane's memory behaviour
