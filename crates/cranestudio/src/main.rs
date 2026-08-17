@@ -31,7 +31,8 @@ async fn main() -> anyhow::Result<()> {
             crane_serve::run(*args).await
         }
         Some(Command::Doctor) => {
-            println!("`cranestudio doctor` is not implemented yet (see PLAN.md M1).");
+            let report = studio_core::hardware::probe(&studio_core::paths::models_dir());
+            print!("{}", studio_tui::doctor::render(&report));
             Ok(())
         }
         Some(Command::Daemon) => {

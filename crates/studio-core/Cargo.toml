@@ -10,3 +10,14 @@ name = "studio_core"
 path = "src/lib.rs"
 
 [dependencies]
+sysinfo = "0.38.4"
+nvml-wrapper = { version = "0.12", optional = true }
+cudarc = { version = "0.19", default-features = false, features = ["driver", "dynamic-linking", "cuda-version-from-build-system"], optional = true }
+directories = "6.0.0"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+metal = { version = "0.29", optional = true }
+
+[features]
+cuda = ["dep:nvml-wrapper", "dep:cudarc"]
+metal = ["dep:metal"]

@@ -21,8 +21,8 @@ clap = { workspace = true }
 
 [features]
 default = []
-cuda = ["crane-serve/cuda"]
-metal = ["crane-serve/metal"]
+cuda = ["crane-serve/cuda", "studio-core/cuda"]
+metal = ["crane-serve/metal", "studio-core/metal"]
 accelerate = ["crane-serve/accelerate"]
 rocm = ["crane-serve/rocm"]
 cudnn = ["crane-serve/cudnn"]
