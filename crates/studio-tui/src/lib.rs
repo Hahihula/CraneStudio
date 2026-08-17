@@ -3,4 +3,5 @@
 
 pub mod catalog;
 pub mod doctor;
+pub mod download;
 mod fmt;

@@ -14,6 +14,12 @@ pub struct DiskInfo {
 /// whose mount point is the longest matching prefix of `target`, the same
 /// resolution `df` uses.
 pub(super) fn probe(target: &Path) -> Vec<DiskInfo> {
+    find(target).into_iter().collect()
+}
+
+/// Same lookup, reused by the download manager's disk-space precheck (§9)
+/// so both agree on which filesystem a given path lives on.
+pub(crate) fn find(target: &Path) -> Option<DiskInfo> {
     let disks = Disks::new_with_refreshed_list();
     let target = target.to_string_lossy();
 
@@ -27,6 +33,4 @@ pub(super) fn probe(target: &Path) -> Vec<DiskInfo> {
             total: disk.total_space(),
             available: disk.available_space(),
         })
-        .into_iter()
-        .collect()
 }

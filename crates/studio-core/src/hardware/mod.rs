@@ -3,7 +3,7 @@
 //! since a desktop's compositor and browser routinely hold several GiB.
 
 mod cpu;
-mod disk;
+pub(crate) mod disk;
 mod gpu;
 
 use std::path::Path;

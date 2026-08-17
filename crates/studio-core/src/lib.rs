@@ -3,5 +3,7 @@
 //! construction. No terminal-rendering code lives here — see PLAN.md §3.3.
 
 pub mod catalog;
+pub mod config;
+pub mod download;
 pub mod hardware;
 pub mod paths;

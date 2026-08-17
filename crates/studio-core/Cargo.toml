@@ -16,8 +16,12 @@ cudarc = { version = "0.19", default-features = false, features = ["driver", "dy
 directories = "6.0.0"
 ron = "0.12.2"
 serde = { workspace = true, features = ["derive"] }
-reqwest = { version = "0.13.4", features = ["json", "query"] }
+reqwest = { version = "0.13.4", features = ["json", "query", "stream"] }
 serde_json.workspace = true
+sha2 = "0.11.0"
+tokio-util = "0.7.19"
+futures-util = "0.3.34"
+tokio = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 metal = { version = "0.29", optional = true }
@@ -29,4 +33,3 @@ metal = ["dep:metal"]
 [dev-dependencies]
 crane-serve.workspace = true
 tempfile = "3.27.0"
-tokio.workspace = true
