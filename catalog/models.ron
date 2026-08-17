@@ -1,0 +1,45 @@
+// CraneStudio curated model catalog — PLAN.md §8.1.
+//
+// Every entry here has actually been launched: downloaded (or already
+// present locally), started with `cranestudio __serve`, and exercised
+// against a real request. Adding a model is meant to be a pure data change
+// — no code — so keep new entries to this same standard before merging.
+(
+    schema_version: 1,
+    updated: "2026-08-17",
+    models: [
+        (
+            id: "qwen3.5-0.8b",
+            display_name: "Qwen 3.5 0.8B",
+            family: "qwen3_5",
+            model_type: "qwen3_5",
+            params: 800000000,
+            native_context: 262144,
+            capabilities: [Text, Tools],
+            license: "apache-2.0",
+            gated: false,
+            supports: (
+                isq: true,
+                kv_quant: true,
+                kv_swap: false,
+                vision: false,
+            ),
+            variants: [
+                (
+                    id: "qwen3.5-0.8b-q8_0",
+                    repo: "unsloth/Qwen3.5-0.8B-GGUF",
+                    revision: "6ab461498e2023f6e3c1baea90a8f0fe38ab64d0",
+                    files: ["Qwen3.5-0.8B-Q8_0.gguf"],
+                    format: Gguf,
+                    quant: Some("Q8_0"),
+                    download_bytes: 811843840,
+                    // Smoke-tested only (health check + a tools round trip
+                    // at a few hundred tokens of context) — not a depth
+                    // run, so no `measured` entry yet per §7.3: only claim
+                    // what was actually tested.
+                    measured: {},
+                ),
+            ],
+        ),
+    ],
+)

@@ -6,6 +6,8 @@ use std::fmt::Write as _;
 
 use studio_core::hardware::{Backend, HardwareReport};
 
+use crate::fmt::bytes;
+
 #[must_use]
 pub fn render(report: &HardwareReport) -> String {
     let mut out = String::new();
@@ -19,8 +21,8 @@ pub fn render(report: &HardwareReport) -> String {
     let _ = writeln!(
         out,
         "RAM: {} available / {} total",
-        fmt_bytes(report.ram_available),
-        fmt_bytes(report.ram_total)
+        bytes(report.ram_available),
+        bytes(report.ram_total)
     );
 
     render_gpus(report, &mut out);
@@ -50,8 +52,8 @@ fn render_gpus(report: &HardwareReport, out: &mut String) {
         let _ = writeln!(
             out,
             "  VRAM: {} free / {} total",
-            fmt_bytes(gpu.vram_free),
-            fmt_bytes(gpu.vram_total)
+            bytes(gpu.vram_free),
+            bytes(gpu.vram_total)
         );
         if let Some((major, minor)) = gpu.compute_capability {
             let _ = writeln!(out, "  Compute capability: {major}.{minor}");
@@ -81,8 +83,8 @@ fn render_disks(disks: &[studio_core::hardware::DiskInfo], out: &mut String) {
             out,
             "Disk ({}): {} available / {} total",
             disk.mount_point,
-            fmt_bytes(disk.available),
-            fmt_bytes(disk.total)
+            bytes(disk.available),
+            bytes(disk.total)
         );
     }
 }
@@ -93,24 +95,6 @@ fn backend_label(backend: Backend) -> &'static str {
         Backend::Metal => "Metal",
         Backend::Rocm => "ROCm",
         Backend::Cpu => "CPU",
-    }
-}
-
-// Precision loss above 2^52 bytes (4 EiB) is irrelevant for VRAM/RAM/disk
-// sizes; this is display formatting only.
-#[allow(clippy::cast_precision_loss)]
-fn fmt_bytes(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit < UNITS.len() - 1 {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{value:.0} {}", UNITS[unit])
-    } else {
-        format!("{value:.1} {}", UNITS[unit])
     }
 }
 
@@ -145,12 +129,5 @@ mod tests {
     fn no_gpu_warning_on_cpu_backend() {
         let out = render(&empty_report(Backend::Cpu));
         assert!(!out.contains("none was found"), "{out}");
-    }
-
-    #[test]
-    fn fmt_bytes_picks_the_right_unit() {
-        assert_eq!(fmt_bytes(512), "512 B");
-        assert_eq!(fmt_bytes(2048), "2.0 KiB");
-        assert_eq!(fmt_bytes(24 * 1024 * 1024 * 1024), "24.0 GiB");
     }
 }

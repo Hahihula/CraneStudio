@@ -2,5 +2,6 @@
 //! the VRAM estimator, the download manager, profiles, and launch-spec
 //! construction. No terminal-rendering code lives here — see PLAN.md §3.3.
 
+pub mod catalog;
 pub mod hardware;
 pub mod paths;
