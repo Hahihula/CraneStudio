@@ -24,3 +24,13 @@ pub fn data_dir() -> PathBuf {
 pub fn models_dir() -> PathBuf {
     data_dir().join("models")
 }
+
+#[must_use]
+pub fn profiles_dir() -> PathBuf {
+    data_dir().join("profiles")
+}
+
+#[must_use]
+pub fn measurements_file() -> PathBuf {
+    data_dir().join("measurements.ron")
+}

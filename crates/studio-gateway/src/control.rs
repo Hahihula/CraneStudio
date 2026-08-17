@@ -45,6 +45,12 @@ pub struct Daemon {
     shutdown_epoch: AtomicU64,
     shutdown_tx: watch::Sender<bool>,
     grace_period: Duration,
+    /// §7.3 measurement samplers (`measure::spawn`) are detached
+    /// background tasks on the same tokio runtime this process tears down
+    /// on exit — without waiting for them here first, a launch stopped as
+    /// part of "stop everything" would have its final measurement silently
+    /// lost to the runtime shutdown racing the sampler's next ~1s tick.
+    sampler_tasks: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
 impl Daemon {
@@ -68,6 +74,7 @@ impl Daemon {
             shutdown_epoch: AtomicU64::new(0),
             shutdown_tx,
             grace_period,
+            sampler_tasks: std::sync::Mutex::new(Vec::new()),
         });
         (daemon, shutdown_rx)
     }
@@ -85,6 +92,21 @@ impl Daemon {
     #[must_use]
     pub fn attached_client_count(&self) -> usize {
         self.attached_clients.load(Ordering::SeqCst)
+    }
+
+    fn register_sampler(&self, handle: tokio::task::JoinHandle<()>) {
+        self.sampler_tasks.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(handle);
+    }
+
+    /// Waits (up to a bounded timeout each) for every measurement sampler
+    /// started since the last call to finish writing its record. Called
+    /// before this process's tokio runtime — and every task still on it —
+    /// gets torn down on a whole-daemon shutdown.
+    async fn wait_for_samplers(&self) {
+        let handles: Vec<_> = std::mem::take(&mut *self.sampler_tasks.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        for handle in handles {
+            let _ = tokio::time::timeout(Duration::from_secs(5), handle).await;
+        }
     }
 }
 
@@ -104,6 +126,15 @@ pub fn router(daemon: Arc<Daemon>) -> Router {
 struct LaunchRequest {
     spec: LaunchSpec,
     label: String,
+    /// §7.3: when the caller (the wizard) supplies both of these, the
+    /// launch is measured — a background sampler (`measure::spawn`) tracks
+    /// this child's peak VRAM and `/v1/stats` for its whole lifetime and
+    /// records one `MeasurementRecord`. Absent for the raw `cranestudio
+    /// launch`/`register` CLI paths, which just don't get measured.
+    #[serde(default)]
+    measurement_key: Option<String>,
+    #[serde(default)]
+    predicted_bytes: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -142,10 +173,24 @@ async fn launch(
     let (request, health_url) = spawn_request_for(&req.spec)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+    // Baselined before spawning — §7.3: "sample total-used delta against
+    // the pre-spawn baseline," so this has to be read now, not from
+    // inside the sampler task after the child may already be loading.
+    let baseline_vram_used = studio_core::hardware::probe_gpus()
+        .into_iter()
+        .find(|g| g.index == req.spec.device)
+        .map_or(0, |g| g.vram_total.saturating_sub(g.vram_free));
+
     let id = daemon
         .supervisor
         .launch(&request, Some(health_url), req.label)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if let (Some(key), Some(predicted_bytes)) = (req.measurement_key, req.predicted_bytes) {
+        let handle = crate::measure::spawn(daemon.supervisor.clone(), id, req.spec, key, predicted_bytes, baseline_vram_used);
+        daemon.register_sampler(handle);
+    }
+
     Ok(Json(LaunchResponse { id: id.0 }))
 }
 
@@ -196,6 +241,7 @@ async fn detach(State(daemon): State<Arc<Daemon>>) -> StatusCode {
 
 async fn shutdown(State(daemon): State<Arc<Daemon>>) -> StatusCode {
     daemon.supervisor.stop_all().await;
+    daemon.wait_for_samplers().await;
     let _ = daemon.shutdown_tx.send(true);
     StatusCode::OK
 }
@@ -229,6 +275,7 @@ async fn handle_attach(mut socket: WebSocket, daemon: Arc<Daemon>) {
             let still_empty = daemon.attached_client_count() == 0;
             if still_current && still_empty && !daemon.is_detached() {
                 daemon.supervisor.stop_all().await;
+                daemon.wait_for_samplers().await;
                 let _ = daemon.shutdown_tx.send(true);
             }
         });

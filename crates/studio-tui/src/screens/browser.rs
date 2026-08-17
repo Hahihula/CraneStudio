@@ -1,8 +1,9 @@
 //! The model browser (§4.3): curated catalog, a local-filesystem scan
 //! (§8.3 needs a UI home somewhere; this is it), and `HuggingFace` search
-//! (§8.2). Selecting a supported local file and pressing Enter hands it to
-//! the wizard — that's the fastest, most reliable path from "never used
-//! this" to a running server, since it needs no download step.
+//! (§8.2). Enter on a supported entry does the fastest thing that gets to
+//! a running server: a Local candidate goes straight to the wizard (no
+//! download needed); a Catalog or Search entry starts a real download
+//! (`screens::download`) and lands in the wizard once it finishes.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
@@ -93,6 +94,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
                 Tab::Search => Tab::Catalog,
             };
             app.browser.selected = 0;
+            app.status_line = None;
             true
         }
         KeyCode::Down | KeyCode::Char('j') => {
@@ -154,6 +156,7 @@ fn spawn_search(app: &App) {
 }
 
 fn select_current(app: &mut App) {
+    app.status_line = None;
     match app.browser.tab {
         Tab::Local => {
             if let Some(candidate) = app.browser.local.get(app.browser.selected).cloned() {
@@ -166,13 +169,23 @@ fn select_current(app: &mut App) {
             }
         }
         Tab::Search => {
-            app.browser.searching = true;
-            app.browser.editing_query = true;
+            let Some(candidate) = app.browser.search_results.get(app.browser.selected).cloned() else {
+                return;
+            };
+            if !matches!(candidate.classification, Classification::Supported { .. }) {
+                app.status_line = Some("that repo isn't a Crane-supported architecture".to_string());
+            } else if let Some(gguf_file) = candidate.gguf_files.first() {
+                crate::screens::download::start_hf(app, &candidate.repo_id, gguf_file);
+            } else {
+                app.status_line = Some(format!("{}: no .gguf file found in this repo to download", candidate.repo_id));
+            }
         }
         Tab::Catalog => {
-            app.status_line = Some(
-                "download this with `cranestudio download`, then launch it from the Local tab".to_string(),
-            );
+            let Some(catalog) = &app.browser.catalog else { return };
+            let Some(model) = catalog.models.get(app.browser.selected).cloned() else {
+                return;
+            };
+            crate::screens::download::start_catalog(app, &model);
         }
     }
 }
@@ -197,6 +210,8 @@ pub fn render(app: &mut App, frame: &mut Frame) {
 
     let footer_text = if app.browser.editing_query {
         format!("search: {}_   [Enter] run   [Esc] cancel", app.browser.search_query)
+    } else if let Some(status) = &app.status_line {
+        status.clone()
     } else {
         "[Tab] switch tab   [\u{2191}\u{2193}] move   [Enter] select   [/] search   [Esc] back".to_string()
     };

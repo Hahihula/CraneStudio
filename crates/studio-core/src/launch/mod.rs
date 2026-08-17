@@ -14,6 +14,27 @@ const VALID_ISQ_LEVELS: &[&str] = &[
     "q4_0", "q4_1", "q5_0", "q5_1", "q8_0", "q2k", "q3k", "q4k", "q5k", "q6k",
 ];
 
+/// Finds a free loopback TCP port starting from `preferred`, checking up to
+/// `max_tries` candidates — PLAN.md §7.4: "port in use → retry on a
+/// different port automatically," applied to picking a child's port up
+/// front rather than waiting for it to crash with `PortInUse` and retrying
+/// after the fact. A bind-then-drop probe, same technique
+/// `cranestudio daemon` uses for its own control/gateway ports; not atomic
+/// (something else could grab the port between the probe and the child's
+/// real bind moments later) but good enough for the local, single-user
+/// case this targets. Falls back to `preferred` itself if nothing in range
+/// is free, so a caller always gets a port to try.
+#[must_use]
+pub fn pick_free_port(preferred: u16, max_tries: u16) -> u16 {
+    for offset in 0..max_tries {
+        let port = preferred.saturating_add(offset);
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return port;
+        }
+    }
+    preferred
+}
+
 #[must_use]
 pub fn normalize_isq_level(level: &str) -> String {
     level.trim().to_lowercase().replace("_k", "k")
@@ -146,6 +167,18 @@ impl LaunchSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn picks_the_next_free_port_when_the_preferred_one_is_taken() {
+        let held = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let taken_port = held.local_addr().unwrap().port();
+
+        let picked = pick_free_port(taken_port, 5);
+
+        assert_ne!(picked, taken_port);
+        // The port really is usable, not just "not the one we started at".
+        assert!(std::net::TcpListener::bind(("127.0.0.1", picked)).is_ok());
+    }
 
     fn minimal_spec() -> LaunchSpec {
         LaunchSpec {

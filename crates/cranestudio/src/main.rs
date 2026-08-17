@@ -346,7 +346,9 @@ async fn run_launch(
     max_seq_len: usize,
 ) -> anyhow::Result<()> {
     let client = reqwest::Client::new();
-    let port = port.unwrap_or(41100);
+    // An explicit --port is a deliberate choice, honored as-is; without one,
+    // pick a free port automatically rather than hard-coding 41100 (§7.4).
+    let port = port.unwrap_or_else(|| studio_core::launch::pick_free_port(41100, 50));
     let spec = build_launch_spec(model_path, model_type, port, max_seq_len);
 
     let response = client

@@ -6,6 +6,7 @@ pub mod browser;
 pub mod chat;
 pub mod connect;
 pub mod doctor;
+pub mod download;
 pub mod home;
 pub mod quit_prompt;
 pub mod wizard;

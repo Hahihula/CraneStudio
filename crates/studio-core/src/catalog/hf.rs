@@ -23,6 +23,10 @@ pub struct HfCandidate {
     pub repo_id: String,
     pub gated: bool,
     pub classification: Classification,
+    /// `.gguf` filenames in the repo, largest-quant-first as HF lists them —
+    /// what the wizard's "download this" action (§4.3) picks from without a
+    /// second network round trip. Empty for a safetensors-only repo.
+    pub gguf_files: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -123,10 +127,13 @@ async fn classify_repo(client: &reqwest::Client, repo_id: &str) -> HfCandidate {
         },
     };
 
+    let gguf_files = siblings.iter().filter(|s| s.rfilename.to_lowercase().ends_with(".gguf")).map(|s| s.rfilename.clone()).collect();
+
     HfCandidate {
         repo_id: repo_id.to_string(),
         gated,
         classification,
+        gguf_files,
     }
 }
 

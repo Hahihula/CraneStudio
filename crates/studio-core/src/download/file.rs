@@ -96,6 +96,16 @@ pub async fn download_file(
     events: &UnboundedSender<Event>,
     cancel: &CancellationToken,
 ) -> Result<(), DownloadError> {
+    // `dest`'s directory need not exist yet — a fresh `<models_dir>/<repo>/
+    // <revision>/` for a repo never downloaded before never does. Every
+    // existing caller (and every test, via `TempDir::new()`) had always
+    // happened to pass an already-existing directory, so this was never
+    // exercised until the TUI's browser started downloading straight into
+    // a brand new nested path.
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent).await?;
+    }
+
     let part = part_path(dest);
     let existing = fs::metadata(&part).await.map(|m| m.len()).unwrap_or(0);
 
@@ -345,6 +355,27 @@ mod tests {
         server.await.unwrap();
         assert!(dest.exists());
         assert!(!part_path(&dest).exists());
+        assert_eq!(tokio::fs::read(&dest).await.unwrap(), body);
+    }
+
+    #[tokio::test]
+    async fn creates_a_destination_directory_that_does_not_exist_yet() {
+        // The real-world shape this covers: `<models_dir>/<org>/<repo>/
+        // <revision>/file.gguf` for a repo downloaded for the first time —
+        // nothing upstream of `download_file` pre-creates that path.
+        let body: &'static [u8] = b"nested destination directory contents";
+        let (listener, url) = local_server().await;
+        let server = tokio::spawn(async move { serve_one(&listener, body, None).await });
+
+        let dir = TempDir::new().unwrap();
+        let dest = dir.path().join("org").join("repo").join("a1b2c3d").join("model.bin");
+        assert!(!dest.parent().unwrap().exists());
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let client = reqwest::Client::new();
+
+        download_file(&client, &url, None, &dest, Some(body.len() as u64), None, &tx, &CancellationToken::new()).await.unwrap();
+
+        server.await.unwrap();
         assert_eq!(tokio::fs::read(&dest).await.unwrap(), body);
     }
 

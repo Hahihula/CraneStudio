@@ -13,7 +13,23 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     /// `HuggingFace` access token, for gated repos (§9). Never logged.
+    #[serde(default)]
     pub hf_token: Option<String>,
+    /// §7.3: there's no telemetry endpoint yet, so this only distinguishes
+    /// "never asked" from "asked and declined" for whenever one exists —
+    /// no prompt is shown and nothing is ever uploaded in v1.
+    #[serde(default)]
+    pub telemetry: Telemetry,
+}
+
+/// §7.3's telemetry consent state — `Unasked` today and for the whole of
+/// v1, since asking would be asking for a server that doesn't exist yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Telemetry {
+    #[default]
+    Unasked,
+    Enabled,
+    Declined,
 }
 
 impl Config {
@@ -66,11 +82,13 @@ mod tests {
 
         let config = Config {
             hf_token: Some("hf_secret".to_string()),
+            ..Config::default()
         };
         config.save(&path).unwrap();
 
         let loaded = Config::load(&path);
         assert_eq!(loaded.hf_token.as_deref(), Some("hf_secret"));
+        assert_eq!(loaded.telemetry, Telemetry::Unasked);
 
         #[cfg(unix)]
         {

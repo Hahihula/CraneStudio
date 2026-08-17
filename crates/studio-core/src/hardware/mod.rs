@@ -70,3 +70,11 @@ pub fn probe(models_dir: &Path) -> HardwareReport {
         backend: Backend::current(),
     }
 }
+
+/// Just the GPU list, without the full `System::new_all()` CPU/RAM scan —
+/// for a §7.3 peak-VRAM sampler polling at ~1Hz for a launch's whole
+/// lifetime, where the full probe's overhead would add up.
+#[must_use]
+pub fn probe_gpus() -> Vec<GpuInfo> {
+    gpu::probe()
+}

@@ -9,4 +9,6 @@ pub mod endpoints;
 pub mod estimator;
 pub mod hardware;
 pub mod launch;
+pub mod measurement;
 pub mod paths;
+pub mod profile;

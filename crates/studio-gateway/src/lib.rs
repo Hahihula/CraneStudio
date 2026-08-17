@@ -2,6 +2,7 @@
 //! See PLAN.md §3.2.
 
 mod control;
+mod measure;
 mod proxy;
 mod registry;
 mod state;

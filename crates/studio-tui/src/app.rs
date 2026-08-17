@@ -12,6 +12,7 @@ use ratatui::Frame;
 use studio_core::catalog::hf::HfCandidate;
 use studio_core::catalog::local::LocalCandidate;
 use studio_core::catalog::{Catalog, Source};
+use studio_core::download::Event as DownloadEvent;
 use studio_core::hardware::HardwareReport;
 
 use crate::daemon_client::{ChildSummary, DaemonClient};
@@ -22,6 +23,7 @@ pub enum Screen {
     Home,
     Doctor,
     Browser,
+    Download,
     Wizard,
     Connect,
     Chat,
@@ -39,6 +41,9 @@ pub enum BackgroundEvent {
     LocalScanDone(Vec<LocalCandidate>),
     SearchDone(Vec<HfCandidate>),
     SearchFailed(String),
+    DownloadProgress(DownloadEvent),
+    DownloadDone(LocalCandidate),
+    DownloadFailed(String),
     Launched { id: u64, name: String, port: u16 },
     LaunchFailed(String),
     StatusRefresh(Vec<ChildSummary>),
@@ -56,6 +61,7 @@ pub struct App {
 
     pub home: screens::home::State,
     pub browser: screens::browser::State,
+    pub download: screens::download::State,
     pub wizard: screens::wizard::State,
     pub connect: screens::connect::State,
     pub chat: screens::chat::State,
@@ -91,6 +97,7 @@ impl App {
             gateway_port,
             home: screens::home::State,
             browser: screens::browser::State::default(),
+            download: screens::download::State::default(),
             wizard: screens::wizard::State::default(),
             connect: screens::connect::State::default(),
             chat: screens::chat::State::default(),
@@ -227,6 +234,12 @@ impl App {
             BackgroundEvent::LocalScanDone(candidates) => self.browser.set_local(candidates),
             BackgroundEvent::SearchDone(results) => self.browser.set_search_results(results),
             BackgroundEvent::SearchFailed(err) => self.status_line = Some(format!("search failed: {err}")),
+            BackgroundEvent::DownloadProgress(event) => self.download.apply_event(&event),
+            BackgroundEvent::DownloadDone(candidate) => {
+                screens::wizard::load_local(self, candidate);
+                self.screen = Screen::Wizard;
+            }
+            BackgroundEvent::DownloadFailed(err) => self.download.error = Some(err),
             BackgroundEvent::Launched { id, name, port } => {
                 self.known_ports.insert(id, port);
                 self.connect.set_active(id, name, port, self.gateway_port);
@@ -252,6 +265,7 @@ impl App {
         // Screens that capture free-text input get first refusal on keys.
         let consumed = match self.screen {
             Screen::Browser => screens::browser::handle_key(self, key),
+            Screen::Download => screens::download::handle_key(self, key),
             Screen::Wizard => screens::wizard::handle_key(self, key),
             Screen::Chat => screens::chat::handle_key(self, key),
             Screen::Home | Screen::Doctor | Screen::Connect => false,
@@ -310,6 +324,7 @@ impl App {
             Screen::Home => screens::home::render(self, frame),
             Screen::Doctor => screens::doctor::render(self, frame),
             Screen::Browser => screens::browser::render(self, frame),
+            Screen::Download => screens::download::render(self, frame),
             Screen::Wizard => screens::wizard::render(self, frame),
             Screen::Connect => screens::connect::render(self, frame),
             Screen::Chat => screens::chat::render(self, frame),

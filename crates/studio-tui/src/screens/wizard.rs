@@ -23,6 +23,7 @@ use studio_core::estimator::{
 };
 use studio_core::hardware::Backend;
 use studio_core::launch::LaunchSpec;
+use studio_core::measurement::MeasurementDb;
 
 use crate::app::{App, BackgroundEvent, Screen};
 
@@ -102,6 +103,17 @@ pub fn load_local(app: &mut App, candidate: LocalCandidate) {
         .map_or((app.hardware.ram_available, 0), |(idx, g)| (g.vram_free, idx));
     app.wizard.device = device;
 
+    // §7.3: apply the global measured÷predicted correction factor (once
+    // there's at least one local data point) by shrinking the effective
+    // budget the solver searches within — equivalent to scaling every
+    // prediction up by the same factor before comparing it to
+    // `usable_vram`, without touching the estimator's own math.
+    let db = MeasurementDb::load(&studio_core::paths::measurements_file());
+    let usable_vram = match db.correction_factor() {
+        Some(factor) if factor > 0.0 => (usable_vram as f64 / factor) as u64,
+        _ => usable_vram,
+    };
+
     let variants = vec![Variant { label: variant_label, weight_bytes, is_isq: false }];
     let request = SolveRequest {
         cfg: &cfg,
@@ -118,6 +130,15 @@ pub fn load_local(app: &mut App, candidate: LocalCandidate) {
         max_concurrent: 1,
     };
     app.wizard.result = Some(solve(&request, 262_144));
+}
+
+/// The §7.3 measurement-DB key for one solved config — must match exactly
+/// between the wizard's measured/predicted display and what gets sent
+/// along with the actual launch, or a launch's own outcome would never be
+/// found by the very config that produced it.
+fn measurement_key_for(app: &App, config: &SolvedConfig) -> String {
+    let backend_class = studio_core::measurement::backend_class(app.hardware.backend, app.hardware.gpus.get(app.wizard.device));
+    studio_core::measurement::build_key(&app.wizard.model_type, &app.wizard.variant_label, config.kv_quant, config.context, config.concurrency, &backend_class)
 }
 
 fn read_config(candidate: &LocalCandidate) -> Result<ModelConfig, String> {
@@ -179,7 +200,10 @@ fn attempt_launch(app: &mut App) {
         return;
     };
 
-    let port = 41100 + u16::try_from(app.last_running.len()).unwrap_or(0);
+    let preferred_port = 41100 + u16::try_from(app.last_running.len()).unwrap_or(0);
+    let port = studio_core::launch::pick_free_port(preferred_port, 50);
+    let measurement_key = measurement_key_for(app, &config);
+    let predicted_bytes = config.predicted.total();
     let spec = LaunchSpec {
         model_path: candidate.path.to_string_lossy().to_string(),
         model_type: app.wizard.model_type.clone(),
@@ -200,15 +224,15 @@ fn attempt_launch(app: &mut App) {
     };
 
     app.wizard.launching = true;
-    spawn_launch(app, spec, app.wizard.variant_label.clone());
+    spawn_launch(app, spec, app.wizard.variant_label.clone(), measurement_key, predicted_bytes);
 }
 
-fn spawn_launch(app: &App, spec: LaunchSpec, name: String) {
+fn spawn_launch(app: &App, spec: LaunchSpec, name: String, measurement_key: String, predicted_bytes: u64) {
     let tx = app.sender();
     let control_base = app.control_base();
     let gateway_base = app.gateway_base();
     tokio::spawn(async move {
-        let outcome = do_launch(&control_base, &gateway_base, &spec, &name).await;
+        let outcome = do_launch(&control_base, &gateway_base, &spec, &name, &measurement_key, predicted_bytes).await;
         match outcome {
             Ok(id) => {
                 let _ = tx.send(BackgroundEvent::Launched { id, name, port: spec.port });
@@ -220,7 +244,7 @@ fn spawn_launch(app: &App, spec: LaunchSpec, name: String) {
     });
 }
 
-async fn do_launch(control_base: &str, gateway_base: &str, spec: &LaunchSpec, name: &str) -> Result<u64, String> {
+async fn do_launch(control_base: &str, gateway_base: &str, spec: &LaunchSpec, name: &str, measurement_key: &str, predicted_bytes: u64) -> Result<u64, String> {
     let client = reqwest::Client::new();
 
     let register = client.post(format!("{gateway_base}/register")).json(&serde_json::json!({"name": name, "spec": spec})).send().await.map_err(|e| e.to_string())?;
@@ -228,7 +252,12 @@ async fn do_launch(control_base: &str, gateway_base: &str, spec: &LaunchSpec, na
         return Err(format!("register failed: {}", register.text().await.unwrap_or_default()));
     }
 
-    let launch = client.post(format!("{control_base}/control/launch")).json(&serde_json::json!({"spec": spec, "label": name})).send().await.map_err(|e| e.to_string())?;
+    let launch = client
+        .post(format!("{control_base}/control/launch"))
+        .json(&serde_json::json!({"spec": spec, "label": name, "measurement_key": measurement_key, "predicted_bytes": predicted_bytes}))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
     if !launch.status().is_success() {
         return Err(format!("launch failed: {}", launch.text().await.unwrap_or_default()));
     }
@@ -262,6 +291,7 @@ pub fn render(app: &mut App, frame: &mut Frame) {
 }
 
 fn render_result(app: &App, result: &SolveResult, frame: &mut Frame, area: ratatui::layout::Rect) {
+    let db = MeasurementDb::load(&studio_core::paths::measurements_file());
     match result {
         SolveResult::Reaches(configs) => {
             let items: Vec<ListItem> = configs
@@ -269,7 +299,7 @@ fn render_result(app: &App, result: &SolveResult, frame: &mut Frame, area: ratat
                 .enumerate()
                 .map(|(i, c)| {
                     let style = if i == app.wizard.selected_config { Style::new().fg(Color::Black).bg(Color::Green) } else { Style::new() };
-                    ListItem::new(Line::from(vec![Span::styled(describe_config(c), style)]))
+                    ListItem::new(Line::from(vec![Span::styled(describe_config(app, &db, c), style)]))
                 })
                 .collect();
             frame.render_widget(List::new(items).block(Block::bordered().title("Reaches 256k — pick a configuration")), area);
@@ -279,7 +309,7 @@ fn render_result(app: &App, result: &SolveResult, frame: &mut Frame, area: ratat
                 format!("Short of 256k — best reachable context is {achieved_context}"),
                 Style::new().fg(Color::Yellow),
             ))];
-            lines.push(Line::from(describe_config(best)));
+            lines.push(Line::from(describe_config(app, &db, best)));
             lines.push(Line::raw(""));
             lines.push(Line::from("What's using the VRAM:"));
             for b in blockers {
@@ -302,15 +332,15 @@ fn render_result(app: &App, result: &SolveResult, frame: &mut Frame, area: ratat
     }
 }
 
-fn describe_config(c: &SolvedConfig) -> String {
+/// §7.3: "on a subsequent launch with a matching key, the wizard shows the
+/// measured number instead of the prediction, labelled as measured" — and
+/// pre-warns if this exact configuration has OOM'd before.
+fn describe_config(app: &App, db: &MeasurementDb, c: &SolvedConfig) -> String {
     let kv = c.kv_quant.map_or("kv fp16", kv_quant_label);
-    format!(
-        "{} — context {} — {kv} — {} concurrent — predicted {}",
-        c.variant_label,
-        c.context,
-        c.concurrency,
-        crate::fmt::bytes(c.predicted.total())
-    )
+    let key = measurement_key_for(app, c);
+    let size = db.latest_successful_for(&key).map_or_else(|| format!("predicted {}", crate::fmt::bytes(c.predicted.total())), |m| format!("measured {}", crate::fmt::bytes(m.measured_peak_bytes)));
+    let warning = if db.prior_oom_for(&key).is_some() { "  \u{26a0} OOM'd last time this was tried" } else { "" };
+    format!("{} — context {} — {kv} — {} concurrent — {size}{warning}", c.variant_label, c.context, c.concurrency)
 }
 
 fn kv_quant_label(q: KvQuant) -> &'static str {
