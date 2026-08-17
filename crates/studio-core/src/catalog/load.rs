@@ -99,7 +99,7 @@ mod tests {
     // exercises the fallback-to-bundled path, just over a real network call
     // instead of a deliberately unroutable address.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "hits a real network API — not run by default (§12)"]
     async fn default_remote_url_falls_back_gracefully_when_unpublished() {
         let cache = tempfile::NamedTempFile::new().unwrap();
         std::fs::remove_file(cache.path()).unwrap();

@@ -5,5 +5,8 @@
 pub mod catalog;
 pub mod config;
 pub mod download;
+pub mod endpoints;
+pub mod estimator;
 pub mod hardware;
+pub mod launch;
 pub mod paths;

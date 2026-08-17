@@ -9,7 +9,109 @@
 //! KB regardless of how large the rest of the file's metadata (e.g. a large
 //! tokenizer vocab array) is.
 
+use std::collections::HashMap;
 use std::io::Read;
+
+/// A scalar GGUF metadata value, widened to a common representation. Only
+/// scalars are kept — arrays (tokenizer vocab lists, rope dimension
+/// sections, etc.) are read past and discarded, since none of the
+/// architecture-dimension keys the estimator needs are ever array-typed.
+#[derive(Debug, Clone)]
+pub enum MetaValue {
+    Int(u64),
+    Str(String),
+}
+
+impl MetaValue {
+    #[must_use]
+    pub fn as_usize(&self) -> Option<usize> {
+        match self {
+            MetaValue::Int(n) => usize::try_from(*n).ok(),
+            MetaValue::Str(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            MetaValue::Str(s) => Some(s),
+            MetaValue::Int(_) => None,
+        }
+    }
+}
+
+/// Reads every scalar key/value pair out of a GGUF file's metadata section.
+/// Unlike [`read_architecture`], this reads to the end of the kv section
+/// (no early exit) — meant for local files opened directly, where the whole
+/// section is cheaply available, not a bounded HTTP range fetch. This is
+/// what lets the wizard build a full `ModelConfig` from a local `.gguf`
+/// file's own embedded dimensions, with no companion `config.json` and no
+/// network access — see `estimator::gguf_config`.
+pub fn read_all_scalars<R: Read>(reader: &mut R) -> Option<HashMap<String, MetaValue>> {
+    let mut magic = [0u8; 4];
+    reader.read_exact(&mut magic).ok()?;
+    if &magic != b"GGUF" {
+        return None;
+    }
+    let _version = read_u32(reader)?;
+    let _tensor_count = read_u64(reader)?;
+    let kv_count = read_u64(reader)?;
+
+    let mut map = HashMap::with_capacity(usize::try_from(kv_count).unwrap_or(64));
+    for _ in 0..kv_count {
+        let key = read_string(reader)?;
+        let value_type = read_u32(reader)?;
+        match value_type {
+            0 | 7 => {
+                let mut b = [0u8; 1];
+                reader.read_exact(&mut b).ok()?;
+                map.insert(key, MetaValue::Int(u64::from(b[0])));
+            }
+            1 => {
+                let mut b = [0u8; 1];
+                reader.read_exact(&mut b).ok()?;
+                map.insert(key, MetaValue::Int(u64::from(b[0])));
+            }
+            2 => {
+                let mut b = [0u8; 2];
+                reader.read_exact(&mut b).ok()?;
+                map.insert(key, MetaValue::Int(u64::from(u16::from_le_bytes(b))));
+            }
+            3 => {
+                let mut b = [0u8; 2];
+                reader.read_exact(&mut b).ok()?;
+                map.insert(key, MetaValue::Int(u64::from(i16::from_le_bytes(b) as u16)));
+            }
+            4 | 5 => {
+                let v = read_u32(reader)?;
+                map.insert(key, MetaValue::Int(u64::from(v)));
+            }
+            6 => {
+                let mut b = [0u8; 4];
+                reader.read_exact(&mut b).ok()?;
+                map.insert(key, MetaValue::Int(u64::from(f32::from_le_bytes(b).to_bits())));
+            }
+            8 => {
+                let s = read_string(reader)?;
+                map.insert(key, MetaValue::Str(s));
+            }
+            9 => {
+                skip_value(reader, 9)?;
+            }
+            10 | 11 => {
+                let v = read_u64(reader)?;
+                map.insert(key, MetaValue::Int(v));
+            }
+            12 => {
+                let mut b = [0u8; 8];
+                reader.read_exact(&mut b).ok()?;
+                map.insert(key, MetaValue::Int(f64::from_le_bytes(b).to_bits()));
+            }
+            _ => return None,
+        }
+    }
+    Some(map)
+}
 
 pub fn read_architecture<R: Read>(reader: &mut R) -> Option<String> {
     let mut magic = [0u8; 4];
@@ -153,5 +255,23 @@ mod tests {
         write_string(&mut buf, "general.architecture");
         // cut off mid-value — simulates a too-small HTTP range fetch
         assert_eq!(read_architecture(&mut &buf[..]), None);
+    }
+
+    fn write_kv_u32(buf: &mut Vec<u8>, key: &str, value: u32) {
+        write_string(buf, key);
+        buf.extend_from_slice(&4u32.to_le_bytes()); // type: u32
+        buf.extend_from_slice(&value.to_le_bytes());
+    }
+
+    #[test]
+    fn reads_all_scalars_and_skips_arrays() {
+        let mut buf = header(3);
+        write_kv_string(&mut buf, "general.architecture", "qwen35");
+        write_kv_u32(&mut buf, "qwen35.block_count", 24);
+        write_kv_u32_array(&mut buf, "tokenizer.ggml.token_type", &[1, 2, 3]);
+        let map = read_all_scalars(&mut &buf[..]).unwrap();
+        assert_eq!(map.get("general.architecture").and_then(MetaValue::as_str), Some("qwen35"));
+        assert_eq!(map.get("qwen35.block_count").and_then(MetaValue::as_usize), Some(24));
+        assert!(!map.contains_key("tokenizer.ggml.token_type"));
     }
 }

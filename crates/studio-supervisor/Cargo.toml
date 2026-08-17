@@ -10,4 +10,15 @@ name = "studio_supervisor"
 path = "src/lib.rs"
 
 [dependencies]
+futures-util = "0.3.34"
+reqwest = { version = "0.13.4", features = ["json"] }
+serde = { workspace = true, features = ["derive"] }
 studio-core = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tracing.workspace = true
+
+[target."cfg(unix)".dependencies]
+libc = "0.2.189"
+
+[dev-dependencies]
+tempfile = "3.27.0"

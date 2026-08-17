@@ -203,7 +203,7 @@ mod tests {
     // Hits the real `HuggingFace` API — not run by default (§12: CI does not
     // attempt network tests). Run with `cargo test -p studio-core -- --ignored`.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "hits a real network API — not run by default (§12)"]
     async fn search_finds_a_known_supported_and_a_known_unsupported_repo() {
         let client = reqwest::Client::new();
 
@@ -229,7 +229,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
+    #[ignore = "hits a real network API — not run by default (§12)"]
     async fn gguf_only_repo_is_classified_from_its_header() {
         let client = reqwest::Client::new();
         let results = search(&client, "unsloth/Qwen3.5-0.8B-GGUF", 1)

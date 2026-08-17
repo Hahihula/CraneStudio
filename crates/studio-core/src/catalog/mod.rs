@@ -6,7 +6,7 @@
 
 mod architecture;
 mod classify;
-mod gguf;
+pub(crate) mod gguf;
 pub mod hf;
 pub mod load;
 pub mod local;

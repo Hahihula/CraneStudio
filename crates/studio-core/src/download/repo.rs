@@ -161,7 +161,7 @@ mod tests {
     // two small, real, non-LFS files (fast) to prove the orchestration
     // (fetch specs, precheck, concurrent per-file download) end to end.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "hits a real network API — not run by default (§12)"]
     async fn downloads_multiple_real_small_files_concurrently() {
         let client = reqwest::Client::new();
         let dir = TempDir::new().unwrap();
@@ -187,7 +187,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
+    #[ignore = "hits a real network API — not run by default (§12)"]
     async fn unknown_filename_is_reported_before_any_download_starts() {
         let client = reqwest::Client::new();
         let dir = TempDir::new().unwrap();

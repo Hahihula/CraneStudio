@@ -394,7 +394,7 @@ mod tests {
     async fn cancellation_deletes_the_part_file() {
         // A body big enough that the cancellation check (per streamed
         // chunk) has a real window to land mid-transfer.
-        let body: &'static [u8] = &[7u8; 4 * 1024 * 1024];
+        let body: &'static [u8] = vec![7u8; 4 * 1024 * 1024].leak();
         let (listener, url) = local_server().await;
         let server = tokio::spawn(async move { serve_one(&listener, body, None).await });
 
@@ -503,7 +503,7 @@ mod tests {
     // *listing* for meta-llama/Llama-3.2-1B is public, but this actual
     // file download 401s without a token.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "hits a real network API — not run by default (§12)"]
     async fn real_gated_repo_download_401s_without_a_token() {
         let dir = TempDir::new().unwrap();
         let dest = dir.path().join("config.json");

@@ -11,13 +11,18 @@ path = "src/main.rs"
 
 [dependencies]
 studio-core = { workspace = true }
-studio-supervisor = { workspace = true }
-studio-gateway = { workspace = true }
+studio-supervisor.workspace = true
+studio-gateway.workspace = true
 studio-tui = { workspace = true }
 crane-serve = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
 clap = { workspace = true }
+tokio-tungstenite = "0.30.0"
+futures-util = "0.3.34"
+reqwest = { version = "0.13.4", features = ["json"] }
+serde_json.workspace = true
+axum = "0.8.9"
 
 [features]
 default = []

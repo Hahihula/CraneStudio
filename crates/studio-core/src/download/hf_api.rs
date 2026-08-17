@@ -123,7 +123,7 @@ mod tests {
 
     // Hits the real HuggingFace API — not run by default (§12).
     #[tokio::test]
-    #[ignore]
+    #[ignore = "hits a real network API — not run by default (§12)"]
     async fn matches_a_real_known_file() {
         let client = reqwest::Client::new();
         let specs = fetch_file_specs(
@@ -148,7 +148,7 @@ mod tests {
     // Confirms the module-doc claim: metadata for a genuinely gated repo
     // (meta-llama/Llama-3.2-1B) is fetchable with no token at all.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "hits a real network API — not run by default (§12)"]
     async fn gated_repos_still_expose_their_file_listing() {
         let client = reqwest::Client::new();
         let specs = fetch_file_specs(&client, "meta-llama/Llama-3.2-1B", "main", None)

@@ -20,7 +20,6 @@ repository = "https://github.com/hahihula/CraneStudio"
 #   PR #100 — Qwen 3.6 / 3.8 (27B) support
 #   PR #102 — OpenAI tool calling in crane-serve
 crane-serve = { git = "https://github.com/lucasjinreal/Crane", rev = "4242e9c3d85c030341aac562b07c650a0fe3e5f6" }
-crane-core = { git = "https://github.com/lucasjinreal/Crane", rev = "4242e9c3d85c030341aac562b07c650a0fe3e5f6" }
 
 anyhow = "1.0"
 tokio = { version = "1", features = ["full"] }
@@ -28,7 +27,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 studio-core = { path = "crates/studio-core" }
 studio-supervisor = { path = "crates/studio-supervisor" }
