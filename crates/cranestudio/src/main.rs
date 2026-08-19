@@ -235,30 +235,47 @@ fn run_config(action: ConfigAction) -> anyhow::Result<()> {
 // port rather than hard-failing (§7.4), so these are starting *preferences*
 // for the daemon, not guarantees for a client.
 fn preferred_control_port() -> u16 {
-    std::env::var("CRANESTUDIO_CONTROL_PORT").ok().and_then(|v| v.parse().ok()).unwrap_or(studio_gateway::DEFAULT_CONTROL_PORT)
+    std::env::var("CRANESTUDIO_CONTROL_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(studio_gateway::DEFAULT_CONTROL_PORT)
 }
 
 fn preferred_gateway_port() -> u16 {
-    std::env::var("CRANESTUDIO_GATEWAY_PORT").ok().and_then(|v| v.parse().ok()).unwrap_or(studio_gateway::DEFAULT_GATEWAY_PORT)
+    std::env::var("CRANESTUDIO_GATEWAY_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(studio_gateway::DEFAULT_GATEWAY_PORT)
 }
 
 // Client commands (status/stop/attach/launch/register) need to find
 // wherever the daemon actually ended up, which may not be the preferred
 // port above if it had to fall forward — see `studio_core::endpoints`.
 fn control_base_url() -> String {
-    format!("http://127.0.0.1:{}", studio_core::endpoints::resolve_control_port(studio_gateway::DEFAULT_CONTROL_PORT))
+    format!(
+        "http://127.0.0.1:{}",
+        studio_core::endpoints::resolve_control_port(studio_gateway::DEFAULT_CONTROL_PORT)
+    )
 }
 
 fn gateway_base_url() -> String {
-    format!("http://127.0.0.1:{}", studio_core::endpoints::resolve_gateway_port(studio_gateway::DEFAULT_GATEWAY_PORT))
+    format!(
+        "http://127.0.0.1:{}",
+        studio_core::endpoints::resolve_gateway_port(studio_gateway::DEFAULT_GATEWAY_PORT)
+    )
 }
+
+const MAX_PORT_ATTEMPTS: u16 = 20;
 
 /// Binds `preferred`, or the next free port after it (up to `max_tries`
 /// attempts) if that one's already taken — PLAN.md §7.4: "port in use →
 /// retry on a different port automatically," applied to the daemon's own
 /// listening ports rather than hard-failing the whole daemon over a
 /// collision with something unrelated (LM Studio's default is also :1234).
-async fn bind_with_fallback(preferred: u16, max_tries: u16) -> anyhow::Result<(tokio::net::TcpListener, u16)> {
+async fn bind_with_fallback(
+    preferred: u16,
+    max_tries: u16,
+) -> anyhow::Result<(tokio::net::TcpListener, u16)> {
     for offset in 0..max_tries {
         let port = preferred.saturating_add(offset);
         if let Ok(listener) = tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
@@ -288,12 +305,16 @@ async fn run_daemon() -> anyhow::Result<()> {
     let control_app = studio_gateway::router(daemon);
     let gateway_app = studio_gateway::gateway_router().with_state(gateway_state);
 
-    const MAX_PORT_ATTEMPTS: u16 = 20;
-    let (control_listener, control_port) = bind_with_fallback(preferred_control_port(), MAX_PORT_ATTEMPTS).await?;
-    let (gateway_listener, gateway_port) = bind_with_fallback(preferred_gateway_port(), MAX_PORT_ATTEMPTS).await?;
+    let (control_listener, control_port) =
+        bind_with_fallback(preferred_control_port(), MAX_PORT_ATTEMPTS).await?;
+    let (gateway_listener, gateway_port) =
+        bind_with_fallback(preferred_gateway_port(), MAX_PORT_ATTEMPTS).await?;
     println!("control API listening on 127.0.0.1:{control_port}");
     println!("gateway (/v1/*) listening on 127.0.0.1:{gateway_port}");
-    studio_core::endpoints::save(studio_core::endpoints::Endpoints { control_port, gateway_port });
+    studio_core::endpoints::save(studio_core::endpoints::Endpoints {
+        control_port,
+        gateway_port,
+    });
 
     let mut gateway_shutdown_rx = shutdown_rx.clone();
     let control_server =
@@ -402,11 +423,7 @@ async fn run_register(
 async fn run_stop() -> anyhow::Result<()> {
     let client = reqwest::Client::new();
     let base = control_base_url();
-    match client
-        .post(format!("{base}/control/shutdown"))
-        .send()
-        .await
-    {
+    match client.post(format!("{base}/control/shutdown")).send().await {
         Ok(_) => println!("daemon stopped."),
         Err(_) => println!("no daemon running at {base}."),
     }
@@ -445,7 +462,10 @@ async fn run_status() -> anyhow::Result<()> {
 async fn run_attach() -> anyhow::Result<()> {
     use futures_util::StreamExt;
 
-    let url = format!("{}/control/attach", control_base_url().replacen("http://", "ws://", 1));
+    let url = format!(
+        "{}/control/attach",
+        control_base_url().replacen("http://", "ws://", 1)
+    );
     let (stream, _) = tokio_tungstenite::connect_async(&url).await?;
     println!(
         "attached — holding the control lease. Ctrl-C to detach and let the daemon decide whether to shut down."

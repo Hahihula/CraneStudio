@@ -90,7 +90,69 @@ pub const FAMILIES: &[Family] = &[
         vision: true,
         gated: true,
     },
+    Family {
+        model_type: "minicpmv4_6",
+        config_aliases: &["minicpmv4_6", "minicpmv4.6"],
+        // Same hybrid GDN + attention text tower as Qwen 3.5 under
+        // `text_config` (verified live against a real checkpoint) — but
+        // never ships as GGUF (§2.12-style: no mmproj/vision loader for
+        // any GGUF path), so never matched from a header.
+        gguf_architectures: &[],
+        vision: true,
+        gated: false,
+    },
+    Family {
+        model_type: "minicpm5",
+        // Deliberately empty, not omitted: real checkpoints' `config.json`
+        // declares `"model_type": "llama"` / `architectures:
+        // ["LlamaForCausalLM"]` — indistinguishable from an actual Llama
+        // checkpoint by content alone (verified against a real
+        // `openbmb/MiniCPM5-1B` checkpoint). Adding "llama" as an alias
+        // here would misclassify every genuine (unsupported) Llama
+        // checkpoint as supported, so `from_config`/`from_gguf_architecture`
+        // must never match this entry directly. Two other paths reach it
+        // instead, both verified against the real
+        // `crane-serve/src/engine/model_factory.rs::detect_model_type`:
+        // `from_path_name` mirrors its own path-name-heuristic last
+        // resort (used by `catalog::local`/`catalog::hf` when content
+        // classification finds "llama"), and the catalog (§8.1) sets
+        // `model_type: "minicpm5"` explicitly on its entry, bypassing
+        // detection entirely (`studio_tui::screens::download::known_candidate`).
+        config_aliases: &[],
+        gguf_architectures: &[],
+        vision: false,
+        gated: false,
+    },
 ];
+
+/// Path-name fallback for the one family whose real content (`config.json`
+/// or GGUF header) is genuinely indistinguishable from an unsupported
+/// architecture: `MiniCPM5` declares itself plain `"llama"`. Mirrors
+/// `detect_model_type`'s own last-resort path-name heuristic, including its
+/// precedence — "MiniCPM-V"/"MiniCPM-O" are checked first since both names
+/// also contain the bare "minicpm" substring, and would otherwise be
+/// mis-claimed by it (verified against the real source; MiniCPM-V's own
+/// `config.json` is unambiguous in practice, but a corrupted/incomplete one
+/// falling through to this path should still not be misread as `MiniCPM5`).
+///
+/// Only meant to run over a *local path or repo id*, and only when content
+/// classification specifically found `"llama"` — see `classify::apply_path_hint`,
+/// the caller responsible for that gating.
+#[must_use]
+pub fn from_path_name(path: &str) -> Option<&'static Family> {
+    let p = path.to_lowercase();
+    if p.contains("minicpm-v")
+        || p.contains("minicpmv")
+        || p.contains("minicpm-o")
+        || p.contains("minicpmo")
+    {
+        return None;
+    }
+    if p.contains("minicpm") {
+        return FAMILIES.iter().find(|f| f.model_type == "minicpm5");
+    }
+    None
+}
 
 /// Classifies a `config.json` by its `model_type` / `architectures` fields.
 /// The `model_type`-field path mirrors `detect_model_type`'s step 1
@@ -166,6 +228,28 @@ mod tests {
     }
 
     #[test]
+    fn from_path_name_finds_minicpm5_but_not_v_or_o_variants() {
+        assert_eq!(
+            from_path_name("/home/u/models/openbmb/MiniCPM5-1B-GGUF/model.gguf")
+                .unwrap()
+                .model_type,
+            "minicpm5"
+        );
+        assert_eq!(
+            from_path_name("/home/u/models/MiniCPM-V-4.6").map(|f| f.model_type),
+            None
+        );
+        assert_eq!(
+            from_path_name("/home/u/models/MiniCPM-o-4_5").map(|f| f.model_type),
+            None
+        );
+        assert_eq!(
+            from_path_name("/home/u/models/Llama-3.2-1B").map(|f| f.model_type),
+            None
+        );
+    }
+
+    #[test]
     fn text_and_vl_variants_are_distinguished_by_vision_flag() {
         let text = from_config(Some("qwen3_5"), &[], false).unwrap();
         assert_eq!(text.model_type, "qwen3_5");
@@ -176,6 +260,13 @@ mod tests {
     #[test]
     fn unrecognized_model_type_is_none() {
         assert!(from_config(Some("llama"), &["LlamaForCausalLM".to_string()], false).is_none());
+    }
+
+    #[test]
+    fn minicpm_v_config_type_resolves_to_the_vl_family() {
+        let vl = from_config(Some("minicpmv4_6"), &[], true).unwrap();
+        assert_eq!(vl.model_type, "minicpmv4_6");
+        assert!(from_config(Some("minicpmv4_6"), &[], false).is_none());
     }
 
     #[test]

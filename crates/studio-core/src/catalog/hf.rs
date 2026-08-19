@@ -126,8 +126,17 @@ async fn classify_repo(client: &reqwest::Client, repo_id: &str) -> HfCandidate {
             },
         },
     };
+    // See `classify::apply_path_hint` — a repo id like
+    // "openbmb/MiniCPM5-1B-GGUF" carries the same disambiguating signal a
+    // local path does, for the one family whose real content is otherwise
+    // indistinguishable from an unsupported Llama checkpoint.
+    let classification = classify::apply_path_hint(classification, repo_id);
 
-    let gguf_files = siblings.iter().filter(|s| s.rfilename.to_lowercase().ends_with(".gguf")).map(|s| s.rfilename.clone()).collect();
+    let gguf_files = siblings
+        .iter()
+        .filter(|s| s.rfilename.to_lowercase().ends_with(".gguf"))
+        .map(|s| s.rfilename.clone())
+        .collect();
 
     HfCandidate {
         repo_id: repo_id.to_string(),

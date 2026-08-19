@@ -44,10 +44,18 @@ pub enum BackgroundEvent {
     DownloadProgress(DownloadEvent),
     DownloadDone(LocalCandidate),
     DownloadFailed(String),
-    Launched { id: u64, name: String, port: u16 },
+    Launched {
+        id: u64,
+        name: String,
+        port: u16,
+    },
     LaunchFailed(String),
     StatusRefresh(Vec<ChildSummary>),
-    ChatDelta { role_started: bool, text: String },
+    ChatDelta {
+        role_started: bool,
+        kind: screens::chat::DeltaKind,
+        text: String,
+    },
     ChatDone,
     ChatError(String),
 }
@@ -82,12 +90,18 @@ impl App {
     ///
     /// # Errors
     /// If the daemon can't be reached or spawned.
-    pub async fn new(preferred_control_port: u16, preferred_gateway_port: u16) -> anyhow::Result<Self> {
-        let mut daemon = DaemonClient::connect_or_spawn(preferred_control_port, preferred_gateway_port).await?;
+    pub async fn new(
+        preferred_control_port: u16,
+        preferred_gateway_port: u16,
+    ) -> anyhow::Result<Self> {
+        let mut daemon =
+            DaemonClient::connect_or_spawn(preferred_control_port, preferred_gateway_port).await?;
         daemon.attach().await?;
         let (control_port, gateway_port) = (daemon.control_port(), daemon.gateway_port());
         let hardware = studio_core::hardware::probe(&studio_core::paths::models_dir());
         let (bg_tx, bg_rx) = tokio::sync::mpsc::unbounded_channel();
+        let chat_config =
+            studio_core::config::Config::load(&studio_core::paths::config_dir().join("config.ron"));
 
         let app = App {
             screen: Screen::Home,
@@ -100,7 +114,11 @@ impl App {
             download: screens::download::State::default(),
             wizard: screens::wizard::State::default(),
             connect: screens::connect::State::default(),
-            chat: screens::chat::State::default(),
+            chat: screens::chat::State::new(
+                chat_config.system_prompt,
+                chat_config.max_tokens,
+                chat_config.temperature,
+            ),
             quit_prompt: None,
             should_quit: false,
             status_line: None,
@@ -123,7 +141,11 @@ impl App {
         let tx = self.sender();
         tokio::spawn(async move {
             let cache_path = studio_core::paths::data_dir().join("catalog-cache.ron");
-            let (catalog, source) = studio_core::catalog::load(studio_core::catalog::load::DEFAULT_REMOTE_URL, &cache_path).await;
+            let (catalog, source) = studio_core::catalog::load(
+                studio_core::catalog::load::DEFAULT_REMOTE_URL,
+                &cache_path,
+            )
+            .await;
             let _ = tx.send(BackgroundEvent::CatalogLoaded(Box::new(catalog), source));
         });
     }
@@ -170,8 +192,14 @@ impl App {
         if !std::io::stdin().is_terminal() {
             anyhow::bail!("cranestudio needs an interactive terminal (stdin is not a tty)");
         }
-        let control_port = std::env::var("CRANESTUDIO_CONTROL_PORT").ok().and_then(|v| v.parse().ok()).unwrap_or(studio_gateway::DEFAULT_CONTROL_PORT);
-        let gateway_port = std::env::var("CRANESTUDIO_GATEWAY_PORT").ok().and_then(|v| v.parse().ok()).unwrap_or(studio_gateway::DEFAULT_GATEWAY_PORT);
+        let control_port = std::env::var("CRANESTUDIO_CONTROL_PORT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(studio_gateway::DEFAULT_CONTROL_PORT);
+        let gateway_port = std::env::var("CRANESTUDIO_GATEWAY_PORT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(studio_gateway::DEFAULT_GATEWAY_PORT);
 
         let mut app = App::new(control_port, gateway_port).await?;
         let mut terminal = ratatui::init();
@@ -230,13 +258,17 @@ impl App {
     fn handle_background(&mut self, event: BackgroundEvent) {
         match event {
             BackgroundEvent::StatusRefresh(list) => self.last_running = list,
-            BackgroundEvent::CatalogLoaded(catalog, source) => self.browser.set_catalog(*catalog, source),
+            BackgroundEvent::CatalogLoaded(catalog, source) => {
+                self.browser.set_catalog(*catalog, source);
+            }
             BackgroundEvent::LocalScanDone(candidates) => self.browser.set_local(candidates),
             BackgroundEvent::SearchDone(results) => self.browser.set_search_results(results),
-            BackgroundEvent::SearchFailed(err) => self.status_line = Some(format!("search failed: {err}")),
+            BackgroundEvent::SearchFailed(err) => {
+                self.status_line = Some(format!("search failed: {err}"));
+            }
             BackgroundEvent::DownloadProgress(event) => self.download.apply_event(&event),
             BackgroundEvent::DownloadDone(candidate) => {
-                screens::wizard::load_local(self, candidate);
+                screens::wizard::load_local(self, &candidate);
                 self.screen = Screen::Wizard;
             }
             BackgroundEvent::DownloadFailed(err) => self.download.error = Some(err),
@@ -245,12 +277,18 @@ impl App {
                 self.connect.set_active(id, name, port, self.gateway_port);
                 self.screen = Screen::Connect;
                 self.wizard.launching = false;
-            },
+            }
             BackgroundEvent::LaunchFailed(err) => {
                 self.wizard.launching = false;
                 self.status_line = Some(format!("launch failed: {err}"));
-            },
-            BackgroundEvent::ChatDelta { role_started, text } => self.chat.apply_delta(role_started, &text),
+            }
+            BackgroundEvent::ChatDelta {
+                role_started,
+                kind,
+                text,
+            } => {
+                self.chat.apply_delta(role_started, kind, &text);
+            }
             BackgroundEvent::ChatDone => self.chat.finish_turn(),
             BackgroundEvent::ChatError(err) => self.chat.fail_turn(&err),
         }
@@ -275,13 +313,17 @@ impl App {
         }
 
         match key.code {
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => self.begin_quit().await,
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.begin_quit().await;
+            }
             KeyCode::Char('q') | KeyCode::Esc => self.begin_quit().await,
             KeyCode::Char('h') => self.screen = Screen::Home,
             KeyCode::Char('d') => self.screen = Screen::Doctor,
-            KeyCode::Char('b') | KeyCode::Char('m') => self.screen = Screen::Browser,
-            KeyCode::Char('r') if matches!(self.screen, Screen::Connect) => self.screen = Screen::Chat,
-            _ => {},
+            KeyCode::Char('b' | 'm') => self.screen = Screen::Browser,
+            KeyCode::Char('r') if matches!(self.screen, Screen::Connect) => {
+                self.screen = Screen::Chat;
+            }
+            _ => {}
         }
     }
 
@@ -294,28 +336,26 @@ impl App {
 
     async fn handle_quit_prompt_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Char('k') | KeyCode::Char('K') => self.quit_prompt = Some(QuitChoice::Keep),
-            KeyCode::Char('s') | KeyCode::Char('S') => self.quit_prompt = Some(QuitChoice::Stop),
-            KeyCode::Char('c') | KeyCode::Char('C') => self.quit_prompt = Some(QuitChoice::Cancel),
+            KeyCode::Char('k' | 'K') => self.quit_prompt = Some(QuitChoice::Keep),
+            KeyCode::Char('s' | 'S') => self.quit_prompt = Some(QuitChoice::Stop),
+            KeyCode::Char('c' | 'C') => self.quit_prompt = Some(QuitChoice::Cancel),
             KeyCode::Esc => {
                 self.quit_prompt = None;
-            },
-            KeyCode::Enter => {
-                match self.quit_prompt {
-                    Some(QuitChoice::Keep) => {
-                        let _ = self.daemon.keep_serving().await;
-                        self.should_quit = true;
-                    },
-                    Some(QuitChoice::Stop) => {
-                        let _ = self.daemon.stop_everything().await;
-                        self.should_quit = true;
-                    },
-                    Some(QuitChoice::Cancel) | None => {
-                        self.quit_prompt = None;
-                    },
+            }
+            KeyCode::Enter => match self.quit_prompt {
+                Some(QuitChoice::Keep) => {
+                    let _ = self.daemon.keep_serving().await;
+                    self.should_quit = true;
+                }
+                Some(QuitChoice::Stop) => {
+                    let _ = self.daemon.stop_everything().await;
+                    self.should_quit = true;
+                }
+                Some(QuitChoice::Cancel) | None => {
+                    self.quit_prompt = None;
                 }
             },
-            _ => {},
+            _ => {}
         }
     }
 

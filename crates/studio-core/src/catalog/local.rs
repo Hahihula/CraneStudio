@@ -7,7 +7,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::classify::{Classification, ConfigJson};
+use super::classify::{self, Classification, ConfigJson};
 use super::gguf;
 use super::schema::Format;
 
@@ -74,6 +74,7 @@ fn classify_safetensors_dir(path: &Path) -> LocalCandidate {
         read_config_json(&path.join("config.json")).unwrap_or_else(|| Classification::Unknown {
             reason: "config.json is missing or unreadable".to_string(),
         });
+    let classification = classify::apply_path_hint(classification, &path.to_string_lossy());
     LocalCandidate {
         path: path.to_path_buf(),
         format: Format::Safetensors,
@@ -94,6 +95,7 @@ fn classify_gguf_file(path: &Path) -> LocalCandidate {
         .unwrap_or_else(|| Classification::Unknown {
             reason: "could not read a GGUF architecture header".to_string(),
         });
+    let classification = classify::apply_path_hint(classification, &path.to_string_lossy());
     LocalCandidate {
         path: path.to_path_buf(),
         format: Format::Gguf,
@@ -200,6 +202,63 @@ mod tests {
                 model_type: "qwen3_5",
                 ..
             }
+        ));
+    }
+
+    fn write_gguf_with_architecture(path: &Path, arch: &str) {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"GGUF");
+        buf.extend_from_slice(&3u32.to_le_bytes());
+        buf.extend_from_slice(&0u64.to_le_bytes());
+        buf.extend_from_slice(&1u64.to_le_bytes());
+        let key = "general.architecture";
+        buf.extend_from_slice(&(key.len() as u64).to_le_bytes());
+        buf.extend_from_slice(key.as_bytes());
+        buf.extend_from_slice(&8u32.to_le_bytes());
+        buf.extend_from_slice(&(arch.len() as u64).to_le_bytes());
+        buf.extend_from_slice(arch.as_bytes());
+        fs::write(path, buf).unwrap();
+    }
+
+    /// `MiniCPM5`'s real ambiguity (§ the `architecture::from_path_name` docs):
+    /// its GGUF header says plain "llama", so a directory named after the
+    /// real HF repo must still classify as supported via the path-name
+    /// fallback — the exact gap that made a genuinely-downloaded `MiniCPM5`
+    /// GGUF show up as unsupported in the Local tab.
+    #[test]
+    fn a_llama_gguf_under_a_minicpm_named_dir_is_reclassified() {
+        let root = TempDir::new().unwrap();
+        let dir = root.path().join("openbmb").join("MiniCPM5-1B-GGUF");
+        fs::create_dir_all(&dir).unwrap();
+        write_gguf_with_architecture(&dir.join("MiniCPM5-1B-Q8_0.gguf"), "llama");
+
+        let candidates = scan(root.path());
+        assert_eq!(candidates.len(), 1);
+        assert!(
+            matches!(
+                candidates[0].classification,
+                Classification::Supported {
+                    model_type: "minicpm5",
+                    ..
+                }
+            ),
+            "{:?}",
+            candidates[0].classification
+        );
+    }
+
+    /// A real, unrelated Llama checkpoint must not be swept up by the
+    /// `MiniCPM5` path-name fallback just because "llama" was detected.
+    #[test]
+    fn a_real_llama_gguf_stays_unsupported() {
+        let root = TempDir::new().unwrap();
+        write_gguf_with_architecture(&root.path().join("Llama-3.2-1B.gguf"), "llama");
+
+        let candidates = scan(root.path());
+        assert_eq!(candidates.len(), 1);
+        assert!(matches!(
+            candidates[0].classification,
+            Classification::Unsupported { .. }
         ));
     }
 

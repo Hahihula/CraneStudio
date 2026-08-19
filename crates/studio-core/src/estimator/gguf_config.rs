@@ -28,10 +28,19 @@ pub fn read_model_config<R: Read>(reader: &mut R) -> Result<ModelConfig, String>
 }
 
 fn model_config_from_scalars(scalars: &HashMap<String, MetaValue>) -> Result<ModelConfig, String> {
-    let arch = scalars.get("general.architecture").and_then(MetaValue::as_str).ok_or("missing general.architecture")?;
+    let arch = scalars
+        .get("general.architecture")
+        .and_then(MetaValue::as_str)
+        .ok_or("missing general.architecture")?;
 
-    let get = |suffix: &str| -> Option<usize> { scalars.get(&format!("{arch}.{suffix}")).and_then(MetaValue::as_usize) };
-    let required = |suffix: &str| get(suffix).ok_or_else(|| format!("GGUF metadata is missing `{arch}.{suffix}`"));
+    let get = |suffix: &str| -> Option<usize> {
+        scalars
+            .get(&format!("{arch}.{suffix}"))
+            .and_then(MetaValue::as_usize)
+    };
+    let required = |suffix: &str| {
+        get(suffix).ok_or_else(|| format!("GGUF metadata is missing `{arch}.{suffix}`"))
+    };
 
     let hybrid = get("full_attention_interval")
         .map(|full_attention_interval| {
@@ -79,7 +88,8 @@ mod tests {
 
     #[test]
     fn reads_real_local_qwen3_5_0_8b_gguf() {
-        let Some(cfg) = load("/home/hahihula/mywork/ai/additional_models/Qwen3.5-0.8B-Q8_0.gguf") else {
+        let Some(cfg) = load("/home/hahihula/mywork/ai/additional_models/Qwen3.5-0.8B-Q8_0.gguf")
+        else {
             return;
         };
         assert_eq!(cfg.hidden_size, 1024);
@@ -101,7 +111,8 @@ mod tests {
     fn reads_real_local_qwen3_5_4b_gguf_matches_hf_config() {
         // Cross-checked against the real Qwen/Qwen3.5-4B config.json fetched
         // live in M4: linear_num_value_heads=32, linear_num_key_heads=16.
-        let Some(cfg) = load("/home/hahihula/mywork/ai/additional_models/Qwen3.5-4B-Q6_K.gguf") else {
+        let Some(cfg) = load("/home/hahihula/mywork/ai/additional_models/Qwen3.5-4B-Q6_K.gguf")
+        else {
             return;
         };
         assert_eq!(cfg.num_hidden_layers, 32);

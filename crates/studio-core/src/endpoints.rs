@@ -4,7 +4,7 @@
 //! a model child's. A fresh machine's default gateway port (`:1234`)
 //! collides with other local tools (LM Studio uses the same default), so
 //! the daemon falls forward to the next free port instead of hard-failing,
-//! and writes what it actually bound here so every other CraneStudio
+//! and writes what it actually bound here so every other `CraneStudio`
 //! process (the TUI, `cranestudio status`/`stop`/`attach`, …) can find it
 //! without needing an env var set.
 
@@ -52,12 +52,20 @@ pub fn clear() {
 /// default.
 #[must_use]
 pub fn resolve_control_port(default: u16) -> u16 {
-    std::env::var("CRANESTUDIO_CONTROL_PORT").ok().and_then(|v| v.parse().ok()).or_else(|| load().map(|e| e.control_port)).unwrap_or(default)
+    std::env::var("CRANESTUDIO_CONTROL_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .or_else(|| load().map(|e| e.control_port))
+        .unwrap_or(default)
 }
 
 #[must_use]
 pub fn resolve_gateway_port(default: u16) -> u16 {
-    std::env::var("CRANESTUDIO_GATEWAY_PORT").ok().and_then(|v| v.parse().ok()).or_else(|| load().map(|e| e.gateway_port)).unwrap_or(default)
+    std::env::var("CRANESTUDIO_GATEWAY_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .or_else(|| load().map(|e| e.gateway_port))
+        .unwrap_or(default)
 }
 
 #[cfg(test)]
@@ -66,7 +74,14 @@ mod tests {
 
     #[test]
     fn round_trips_through_ron() {
-        let text = ron::ser::to_string_pretty(&Endpoints { control_port: 41999, gateway_port: 1234 }, ron::ser::PrettyConfig::default()).unwrap();
+        let text = ron::ser::to_string_pretty(
+            &Endpoints {
+                control_port: 41999,
+                gateway_port: 1234,
+            },
+            ron::ser::PrettyConfig::default(),
+        )
+        .unwrap();
         let back: Endpoints = ron::from_str(&text).unwrap();
         assert_eq!(back.control_port, 41999);
         assert_eq!(back.gateway_port, 1234);

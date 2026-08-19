@@ -62,12 +62,7 @@ pub fn read_all_scalars<R: Read>(reader: &mut R) -> Option<HashMap<String, MetaV
         let key = read_string(reader)?;
         let value_type = read_u32(reader)?;
         match value_type {
-            0 | 7 => {
-                let mut b = [0u8; 1];
-                reader.read_exact(&mut b).ok()?;
-                map.insert(key, MetaValue::Int(u64::from(b[0])));
-            }
-            1 => {
+            0 | 1 | 7 => {
                 let mut b = [0u8; 1];
                 reader.read_exact(&mut b).ok()?;
                 map.insert(key, MetaValue::Int(u64::from(b[0])));
@@ -80,7 +75,10 @@ pub fn read_all_scalars<R: Read>(reader: &mut R) -> Option<HashMap<String, MetaV
             3 => {
                 let mut b = [0u8; 2];
                 reader.read_exact(&mut b).ok()?;
-                map.insert(key, MetaValue::Int(u64::from(i16::from_le_bytes(b) as u16)));
+                map.insert(
+                    key,
+                    MetaValue::Int(u64::from(i16::from_le_bytes(b).cast_unsigned())),
+                );
             }
             4 | 5 => {
                 let v = read_u32(reader)?;
@@ -89,7 +87,10 @@ pub fn read_all_scalars<R: Read>(reader: &mut R) -> Option<HashMap<String, MetaV
             6 => {
                 let mut b = [0u8; 4];
                 reader.read_exact(&mut b).ok()?;
-                map.insert(key, MetaValue::Int(u64::from(f32::from_le_bytes(b).to_bits())));
+                map.insert(
+                    key,
+                    MetaValue::Int(u64::from(f32::from_le_bytes(b).to_bits())),
+                );
             }
             8 => {
                 let s = read_string(reader)?;
@@ -270,8 +271,14 @@ mod tests {
         write_kv_u32(&mut buf, "qwen35.block_count", 24);
         write_kv_u32_array(&mut buf, "tokenizer.ggml.token_type", &[1, 2, 3]);
         let map = read_all_scalars(&mut &buf[..]).unwrap();
-        assert_eq!(map.get("general.architecture").and_then(MetaValue::as_str), Some("qwen35"));
-        assert_eq!(map.get("qwen35.block_count").and_then(MetaValue::as_usize), Some(24));
+        assert_eq!(
+            map.get("general.architecture").and_then(MetaValue::as_str),
+            Some("qwen35")
+        );
+        assert_eq!(
+            map.get("qwen35.block_count").and_then(MetaValue::as_usize),
+            Some(24)
+        );
         assert!(!map.contains_key("tokenizer.ggml.token_type"));
     }
 }

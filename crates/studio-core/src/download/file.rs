@@ -368,12 +368,28 @@ mod tests {
         let server = tokio::spawn(async move { serve_one(&listener, body, None).await });
 
         let dir = TempDir::new().unwrap();
-        let dest = dir.path().join("org").join("repo").join("a1b2c3d").join("model.bin");
+        let dest = dir
+            .path()
+            .join("org")
+            .join("repo")
+            .join("a1b2c3d")
+            .join("model.bin");
         assert!(!dest.parent().unwrap().exists());
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let client = reqwest::Client::new();
 
-        download_file(&client, &url, None, &dest, Some(body.len() as u64), None, &tx, &CancellationToken::new()).await.unwrap();
+        download_file(
+            &client,
+            &url,
+            None,
+            &dest,
+            Some(body.len() as u64),
+            None,
+            &tx,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
 
         server.await.unwrap();
         assert_eq!(tokio::fs::read(&dest).await.unwrap(), body);

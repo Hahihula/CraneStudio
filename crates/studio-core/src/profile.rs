@@ -62,7 +62,8 @@ fn file_name(name: &str) -> String {
 /// Any I/O failure creating `dir`, serializing, or writing the file.
 pub fn save(profile: &Profile, dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
-    let text = ron::ser::to_string_pretty(profile, ron::ser::PrettyConfig::default()).map_err(std::io::Error::other)?;
+    let text = ron::ser::to_string_pretty(profile, ron::ser::PrettyConfig::default())
+        .map_err(std::io::Error::other)?;
     std::fs::write(dir.join(file_name(&profile.name)), text)
 }
 
@@ -89,7 +90,11 @@ pub fn list(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = entries
         .flatten()
         .filter(|e| e.path().extension().is_some_and(|ext| ext == "ron"))
-        .filter_map(|e| e.path().file_stem().map(|s| s.to_string_lossy().to_string()))
+        .filter_map(|e| {
+            e.path()
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+        })
         .collect();
     names.sort();
     names
@@ -148,7 +153,10 @@ mod tests {
         save(&sample("zebra"), dir.path()).unwrap();
         save(&sample("alpha"), dir.path()).unwrap();
 
-        assert_eq!(list(dir.path()), vec!["alpha".to_string(), "zebra".to_string()]);
+        assert_eq!(
+            list(dir.path()),
+            vec!["alpha".to_string(), "zebra".to_string()]
+        );
     }
 
     #[test]

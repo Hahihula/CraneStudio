@@ -18,7 +18,9 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// Current time as RFC3339 (`"2026-08-16T14:25:00Z"`), for `MeasurementRecord::at`.
 #[must_use]
 pub fn now_iso() -> String {
-    time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap_or_default()
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,7 +57,10 @@ impl MeasurementDb {
     /// "never fail to start" convention used throughout `studio-core`.
     #[must_use]
     pub fn load(path: &Path) -> Self {
-        std::fs::read_to_string(path).ok().and_then(|text| ron::from_str(&text).ok()).unwrap_or_default()
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| ron::from_str(&text).ok())
+            .unwrap_or_default()
     }
 
     /// # Errors
@@ -65,7 +70,8 @@ impl MeasurementDb {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let text = ron::ser::to_string_pretty(self, ron::ser::PrettyConfig::default()).map_err(std::io::Error::other)?;
+        let text = ron::ser::to_string_pretty(self, ron::ser::PrettyConfig::default())
+            .map_err(std::io::Error::other)?;
         std::fs::write(path, text)
     }
 
@@ -82,14 +88,20 @@ impl MeasurementDb {
     /// (the OOM itself is what `prior_oom_for` surfaces instead).
     #[must_use]
     pub fn latest_successful_for(&self, key: &str) -> Option<&MeasurementRecord> {
-        self.records.iter().rev().find(|r| r.key == key && matches!(r.outcome, Outcome::Ok | Outcome::Thrashed))
+        self.records
+            .iter()
+            .rev()
+            .find(|r| r.key == key && matches!(r.outcome, Outcome::Ok | Outcome::Thrashed))
     }
 
     /// The most recent `Oom` record for `key`, if this exact configuration
     /// has ever OOM'd — what pre-warns the wizard before it's tried again.
     #[must_use]
     pub fn prior_oom_for(&self, key: &str) -> Option<&MeasurementRecord> {
-        self.records.iter().rev().find(|r| r.key == key && r.outcome == Outcome::Oom)
+        self.records
+            .iter()
+            .rev()
+            .find(|r| r.key == key && r.outcome == Outcome::Oom)
     }
 
     /// Mean of measured÷predicted across every non-failed record with a
@@ -103,7 +115,9 @@ impl MeasurementDb {
         let ratios: Vec<f64> = self
             .records
             .iter()
-            .filter(|r| matches!(r.outcome, Outcome::Ok | Outcome::Thrashed) && r.predicted_bytes > 0)
+            .filter(|r| {
+                matches!(r.outcome, Outcome::Ok | Outcome::Thrashed) && r.predicted_bytes > 0
+            })
             .map(|r| r.measured_peak_bytes as f64 / r.predicted_bytes as f64)
             .collect();
         if ratios.is_empty() {
@@ -129,7 +143,10 @@ pub fn record(entry: MeasurementRecord, path: &Path) -> std::io::Result<()> {
 #[must_use]
 pub fn backend_class(backend: Backend, gpu: Option<&GpuInfo>) -> String {
     match backend {
-        Backend::Cuda => gpu.and_then(|g| g.compute_capability).map_or_else(|| "cuda".to_string(), |(major, minor)| format!("cuda_sm{major}{minor}")),
+        Backend::Cuda => gpu.and_then(|g| g.compute_capability).map_or_else(
+            || "cuda".to_string(),
+            |(major, minor)| format!("cuda_sm{major}{minor}"),
+        ),
         Backend::Metal => "metal".to_string(),
         Backend::Rocm => "rocm".to_string(),
         Backend::Cpu => "cpu".to_string(),
@@ -137,8 +154,21 @@ pub fn backend_class(backend: Backend, gpu: Option<&GpuInfo>) -> String {
 }
 
 #[must_use]
-pub fn build_key(model_id: &str, variant_label: &str, kv_quant: Option<KvQuant>, context: usize, concurrency: usize, backend_class: &str) -> String {
-    let kv = kv_quant.map_or_else(|| "none".to_string(), |q| match q { KvQuant::Int8 => "int8".to_string(), KvQuant::Int4 => "int4".to_string() });
+pub fn build_key(
+    model_id: &str,
+    variant_label: &str,
+    kv_quant: Option<KvQuant>,
+    context: usize,
+    concurrency: usize,
+    backend_class: &str,
+) -> String {
+    let kv = kv_quant.map_or_else(
+        || "none".to_string(),
+        |q| match q {
+            KvQuant::Int8 => "int8".to_string(),
+            KvQuant::Int4 => "int4".to_string(),
+        },
+    );
     format!("{model_id}|{variant_label}|kv:{kv}|ctx:{context}|conc:{concurrency}|{backend_class}")
 }
 
@@ -196,7 +226,10 @@ mod tests {
         // latest_for sees the OOM (it's the most recent record overall)...
         assert_eq!(db.latest_for("k1").unwrap().outcome, Outcome::Oom);
         // ...but the display-facing lookup still finds the real measurement.
-        assert_eq!(db.latest_successful_for("k1").unwrap().measured_peak_bytes, 110);
+        assert_eq!(
+            db.latest_successful_for("k1").unwrap().measured_peak_bytes,
+            110
+        );
     }
 
     #[test]

@@ -25,7 +25,10 @@ pub struct ChildInfo {
 pub enum ChildState {
     Starting,
     Healthy,
-    Exited { classification: String, exit_code: Option<i64> },
+    Exited {
+        classification: String,
+        exit_code: Option<i64>,
+    },
     Unknown,
 }
 
@@ -45,10 +48,17 @@ impl<'de> Deserialize<'de> for ChildState {
         Ok(match &value {
             serde_json::Value::String(s) if s == "Starting" => ChildState::Starting,
             serde_json::Value::String(s) if s == "Healthy" => ChildState::Healthy,
-            serde_json::Value::Object(map) => map.get("Exited").map_or(ChildState::Unknown, |exited| ChildState::Exited {
-                classification: exited.get("classification").and_then(|v| v.as_str()).unwrap_or("Unknown").to_string(),
-                exit_code: exited.get("exit_code").and_then(serde_json::Value::as_i64),
-            }),
+            serde_json::Value::Object(map) => {
+                map.get("Exited")
+                    .map_or(ChildState::Unknown, |exited| ChildState::Exited {
+                        classification: exited
+                            .get("classification")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("Unknown")
+                            .to_string(),
+                        exit_code: exited.get("exit_code").and_then(serde_json::Value::as_i64),
+                    })
+            }
             _ => ChildState::Unknown,
         })
     }
@@ -73,7 +83,8 @@ pub struct DaemonClient {
     gateway_base: String,
     control_port: u16,
     gateway_port: u16,
-    attach_socket: Option<WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>,
+    attach_socket:
+        Option<WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>,
 }
 
 impl DaemonClient {
@@ -88,14 +99,25 @@ impl DaemonClient {
     ///
     /// # Errors
     /// If the daemon can't be reached even after trying to spawn one.
-    pub async fn connect_or_spawn(preferred_control_port: u16, preferred_gateway_port: u16) -> anyhow::Result<Self> {
+    pub async fn connect_or_spawn(
+        preferred_control_port: u16,
+        preferred_gateway_port: u16,
+    ) -> anyhow::Result<Self> {
         let http = reqwest::Client::new();
 
-        let known_control_port = studio_core::endpoints::resolve_control_port(preferred_control_port);
-        let known_gateway_port = studio_core::endpoints::resolve_gateway_port(preferred_gateway_port);
+        let known_control_port =
+            studio_core::endpoints::resolve_control_port(preferred_control_port);
+        let known_gateway_port =
+            studio_core::endpoints::resolve_gateway_port(preferred_gateway_port);
         let known_control_base = format!("http://127.0.0.1:{known_control_port}");
 
-        let (control_port, gateway_port) = if http.get(format!("{known_control_base}/control/status")).timeout(Duration::from_secs(1)).send().await.is_ok() {
+        let (control_port, gateway_port) = if http
+            .get(format!("{known_control_base}/control/status"))
+            .timeout(Duration::from_secs(1))
+            .send()
+            .await
+            .is_ok()
+        {
             (known_control_port, known_gateway_port)
         } else {
             spawn_daemon(preferred_control_port, preferred_gateway_port)?;
@@ -138,13 +160,25 @@ impl DaemonClient {
     /// # Errors
     /// If the request fails.
     pub async fn status(&self) -> anyhow::Result<DaemonStatus> {
-        Ok(self.http.get(format!("{}/control/status", self.control_base)).send().await?.json().await?)
+        Ok(self
+            .http
+            .get(format!("{}/control/status", self.control_base))
+            .send()
+            .await?
+            .json()
+            .await?)
     }
 
     /// # Errors
     /// If the request fails.
     pub async fn list(&self) -> anyhow::Result<Vec<ChildSummary>> {
-        Ok(self.http.get(format!("{}/control/list", self.control_base)).send().await?.json().await?)
+        Ok(self
+            .http
+            .get(format!("{}/control/list", self.control_base))
+            .send()
+            .await?
+            .json()
+            .await?)
     }
 
     /// # Errors
@@ -158,7 +192,10 @@ impl DaemonClient {
     /// # Errors
     /// If the request fails.
     pub async fn keep_serving(&self) -> anyhow::Result<()> {
-        self.http.post(format!("{}/control/detach", self.control_base)).send().await?;
+        self.http
+            .post(format!("{}/control/detach", self.control_base))
+            .send()
+            .await?;
         Ok(())
     }
 
@@ -169,7 +206,10 @@ impl DaemonClient {
     /// # Errors
     /// If the request fails.
     pub async fn stop_everything(&self) -> anyhow::Result<()> {
-        self.http.post(format!("{}/control/shutdown", self.control_base)).send().await?;
+        self.http
+            .post(format!("{}/control/shutdown", self.control_base))
+            .send()
+            .await?;
         Ok(())
     }
 
@@ -181,12 +221,25 @@ impl DaemonClient {
     /// # Errors
     /// If either request fails, or the spec fails validation.
     pub async fn register_and_launch(&self, name: &str, spec: &LaunchSpec) -> anyhow::Result<u64> {
-        let register = self.http.post(format!("{}/register", self.gateway_base)).json(&json!({"name": name, "spec": spec})).send().await?;
+        let register = self
+            .http
+            .post(format!("{}/register", self.gateway_base))
+            .json(&json!({"name": name, "spec": spec}))
+            .send()
+            .await?;
         if !register.status().is_success() {
-            anyhow::bail!("register failed: {}", register.text().await.unwrap_or_default());
+            anyhow::bail!(
+                "register failed: {}",
+                register.text().await.unwrap_or_default()
+            );
         }
 
-        let launch = self.http.post(format!("{}/control/launch", self.control_base)).json(&json!({"spec": spec, "label": name})).send().await?;
+        let launch = self
+            .http
+            .post(format!("{}/control/launch", self.control_base))
+            .json(&json!({"spec": spec, "label": name}))
+            .send()
+            .await?;
         if !launch.status().is_success() {
             anyhow::bail!("launch failed: {}", launch.text().await.unwrap_or_default());
         }
@@ -210,7 +263,10 @@ fn spawn_daemon(control_port: u16, gateway_port: u16) -> anyhow::Result<()> {
     let log_dir = studio_core::paths::data_dir().join("logs");
     std::fs::create_dir_all(&log_dir)?;
     let log_path = log_dir.join("daemon.log");
-    let log_file = std::fs::OpenOptions::new().create(true).append(true).open(&log_path)?;
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)?;
     let log_file_err = log_file.try_clone()?;
 
     std::process::Command::new(exe)
@@ -233,11 +289,22 @@ async fn wait_for_daemon(http: &reqwest::Client) -> anyhow::Result<(u16, u16)> {
     while tokio::time::Instant::now() < deadline {
         if let Some(endpoints) = studio_core::endpoints::load() {
             let control_base = format!("http://127.0.0.1:{}", endpoints.control_port);
-            if http.get(format!("{control_base}/control/status")).timeout(Duration::from_secs(1)).send().await.is_ok() {
+            if http
+                .get(format!("{control_base}/control/status"))
+                .timeout(Duration::from_secs(1))
+                .send()
+                .await
+                .is_ok()
+            {
                 return Ok((endpoints.control_port, endpoints.gateway_port));
             }
         }
         tokio::time::sleep(Duration::from_millis(150)).await;
     }
-    anyhow::bail!("daemon did not come up in time — check {}", studio_core::paths::data_dir().join("logs/daemon.log").display())
+    anyhow::bail!(
+        "daemon did not come up in time — check {}",
+        studio_core::paths::data_dir()
+            .join("logs/daemon.log")
+            .display()
+    )
 }

@@ -95,7 +95,10 @@ impl Daemon {
     }
 
     fn register_sampler(&self, handle: tokio::task::JoinHandle<()>) {
-        self.sampler_tasks.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(handle);
+        self.sampler_tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(handle);
     }
 
     /// Waits (up to a bounded timeout each) for every measurement sampler
@@ -103,7 +106,12 @@ impl Daemon {
     /// before this process's tokio runtime — and every task still on it —
     /// gets torn down on a whole-daemon shutdown.
     async fn wait_for_samplers(&self) {
-        let handles: Vec<_> = std::mem::take(&mut *self.sampler_tasks.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        let handles: Vec<_> = std::mem::take(
+            &mut *self
+                .sampler_tasks
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
         for handle in handles {
             let _ = tokio::time::timeout(Duration::from_secs(5), handle).await;
         }
@@ -187,7 +195,14 @@ async fn launch(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     if let (Some(key), Some(predicted_bytes)) = (req.measurement_key, req.predicted_bytes) {
-        let handle = crate::measure::spawn(daemon.supervisor.clone(), id, req.spec, key, predicted_bytes, baseline_vram_used);
+        let handle = crate::measure::spawn(
+            daemon.supervisor.clone(),
+            id,
+            req.spec,
+            key,
+            predicted_bytes,
+            baseline_vram_used,
+        );
         daemon.register_sampler(handle);
     }
 

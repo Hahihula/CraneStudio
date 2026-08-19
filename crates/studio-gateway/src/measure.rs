@@ -41,7 +41,14 @@ struct StatsSnapshot {
 /// whole-process shutdown can wait for it to finish writing its final
 /// record before the tokio runtime (and every detached task still on it)
 /// gets torn down.
-pub fn spawn(supervisor: Supervisor, id: ChildId, spec: LaunchSpec, measurement_key: String, predicted_bytes: u64, baseline_vram_used: u64) -> tokio::task::JoinHandle<()> {
+pub fn spawn(
+    supervisor: Supervisor,
+    id: ChildId,
+    spec: LaunchSpec,
+    measurement_key: String,
+    predicted_bytes: u64,
+    baseline_vram_used: u64,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let observed = sample_until_gone(&supervisor, id, &spec, baseline_vram_used).await;
         let record = MeasurementRecord {
@@ -69,7 +76,12 @@ struct Observed {
     outcome: Outcome,
 }
 
-async fn sample_until_gone(supervisor: &Supervisor, id: ChildId, spec: &LaunchSpec, baseline_vram_used: u64) -> Observed {
+async fn sample_until_gone(
+    supervisor: &Supervisor,
+    id: ChildId,
+    spec: &LaunchSpec,
+    baseline_vram_used: u64,
+) -> Observed {
     let client = reqwest::Client::new();
     let stats_url = format!("http://127.0.0.1:{}/v1/stats", spec.port);
 
@@ -86,11 +98,16 @@ async fn sample_until_gone(supervisor: &Supervisor, id: ChildId, spec: &LaunchSp
 
         match supervisor.state(id) {
             Some(ChildState::Healthy) => ever_healthy = true,
-            Some(ChildState::Exited { classification, .. }) => final_classification = Some(classification),
+            Some(ChildState::Exited { classification, .. }) => {
+                final_classification = Some(classification);
+            }
             Some(ChildState::Starting) | None => {}
         }
 
-        if let Some(gpu) = studio_core::hardware::probe_gpus().into_iter().find(|g| g.index == spec.device) {
+        if let Some(gpu) = studio_core::hardware::probe_gpus()
+            .into_iter()
+            .find(|g| g.index == spec.device)
+        {
             let used = gpu.vram_total.saturating_sub(gpu.vram_free);
             peak_delta = peak_delta.max(used.saturating_sub(baseline_vram_used));
         }
@@ -104,7 +121,9 @@ async fn sample_until_gone(supervisor: &Supervisor, id: ChildId, spec: &LaunchSp
                 last_decode_tps = stats.avg_decode_tokens_per_sec as f32;
             }
             let total = stats.total_prompt_tokens + stats.total_completion_tokens;
-            max_depth_reached = max_depth_reached.max(usize::try_from(total.saturating_sub(prev_total_tokens)).unwrap_or(usize::MAX));
+            max_depth_reached = max_depth_reached.max(
+                usize::try_from(total.saturating_sub(prev_total_tokens)).unwrap_or(usize::MAX),
+            );
             prev_total_tokens = total;
         }
 
@@ -127,11 +146,23 @@ async fn sample_until_gone(supervisor: &Supervisor, id: ChildId, spec: &LaunchSp
 /// children (see module docs) — `ever_healthy` is what distinguishes "ran
 /// fine, then was stopped" (`Ok`/`Thrashed`) from "vanished without ever
 /// working" (`Failed`) in that common case.
-fn outcome_for(classification: Option<ExitClassification>, ever_healthy: bool, kv_swaps: u64) -> Outcome {
+fn outcome_for(
+    classification: Option<ExitClassification>,
+    ever_healthy: bool,
+    kv_swaps: u64,
+) -> Outcome {
     match classification {
-        Some(ExitClassification::OomAtLoad | ExitClassification::OomAtPrefill | ExitClassification::HostOomKilled) => Outcome::Oom,
+        Some(
+            ExitClassification::OomAtLoad
+            | ExitClassification::OomAtPrefill
+            | ExitClassification::HostOomKilled,
+        ) => Outcome::Oom,
         Some(ExitClassification::Stopped) | None if ever_healthy => {
-            if kv_swaps > 0 { Outcome::Thrashed } else { Outcome::Ok }
+            if kv_swaps > 0 {
+                Outcome::Thrashed
+            } else {
+                Outcome::Ok
+            }
         }
         _ => Outcome::Failed,
     }
@@ -143,20 +174,35 @@ mod tests {
 
     #[test]
     fn oom_classification_wins_regardless_of_health() {
-        assert_eq!(outcome_for(Some(ExitClassification::OomAtPrefill), true, 0), Outcome::Oom);
-        assert_eq!(outcome_for(Some(ExitClassification::HostOomKilled), false, 0), Outcome::Oom);
+        assert_eq!(
+            outcome_for(Some(ExitClassification::OomAtPrefill), true, 0),
+            Outcome::Oom
+        );
+        assert_eq!(
+            outcome_for(Some(ExitClassification::HostOomKilled), false, 0),
+            Outcome::Oom
+        );
     }
 
     #[test]
     fn clean_stop_after_healthy_is_ok_unless_it_thrashed() {
-        assert_eq!(outcome_for(Some(ExitClassification::Stopped), true, 0), Outcome::Ok);
-        assert_eq!(outcome_for(Some(ExitClassification::Stopped), true, 3), Outcome::Thrashed);
+        assert_eq!(
+            outcome_for(Some(ExitClassification::Stopped), true, 0),
+            Outcome::Ok
+        );
+        assert_eq!(
+            outcome_for(Some(ExitClassification::Stopped), true, 3),
+            Outcome::Thrashed
+        );
     }
 
     #[test]
     fn vanishing_without_ever_becoming_healthy_is_failed() {
         assert_eq!(outcome_for(None, false, 0), Outcome::Failed);
-        assert_eq!(outcome_for(Some(ExitClassification::CleanEarlyExit), false, 0), Outcome::Failed);
+        assert_eq!(
+            outcome_for(Some(ExitClassification::CleanEarlyExit), false, 0),
+            Outcome::Failed
+        );
     }
 
     #[test]

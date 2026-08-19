@@ -52,7 +52,9 @@ pub fn render(app: &mut App, frame: &mut Frame) {
                     ChildState::Unknown => ("? unknown", Color::Gray),
                 };
                 let port = app.known_ports.get(&child.info.id).copied();
-                let port_note = port.map(|p| format!(" — 127.0.0.1:{p}")).unwrap_or_default();
+                let port_note = port
+                    .map(|p| format!(" — 127.0.0.1:{p}"))
+                    .unwrap_or_default();
                 ListItem::new(Line::from(vec![
                     Span::styled(glyph, Style::new().fg(color)),
                     Span::raw(format!("  {}{port_note}", child.info.label)),
@@ -60,11 +62,15 @@ pub fn render(app: &mut App, frame: &mut Frame) {
             })
             .collect()
     };
-    frame.render_widget(List::new(items).block(Block::bordered().title("Running")), running);
-
-    let status = app.status_line.as_deref().unwrap_or(
-        "[b] browse models   [d] hardware   [r] connect/chat (if running)   [q] quit",
+    frame.render_widget(
+        List::new(items).block(Block::bordered().title("Running")),
+        running,
     );
+
+    let status = app
+        .status_line
+        .as_deref()
+        .unwrap_or("[b] browse models   [d] hardware   [r] connect/chat (if running)   [q] quit");
     frame.render_widget(Paragraph::new(status), footer);
 }
 

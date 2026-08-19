@@ -132,7 +132,9 @@ fn handle_query_input(app: &mut App, key: KeyEvent) -> bool {
         KeyCode::Backspace => {
             app.browser.search_query.pop();
         }
-        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => app.browser.search_query.push(c),
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.browser.search_query.push(c);
+        }
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return false,
         _ => {}
     }
@@ -161,27 +163,39 @@ fn select_current(app: &mut App) {
         Tab::Local => {
             if let Some(candidate) = app.browser.local.get(app.browser.selected).cloned() {
                 if matches!(candidate.classification, Classification::Supported { .. }) {
-                    crate::screens::wizard::load_local(app, candidate);
+                    crate::screens::wizard::load_local(app, &candidate);
                     app.screen = crate::app::Screen::Wizard;
                 } else {
-                    app.status_line = Some("that file isn't a Crane-supported architecture".to_string());
+                    app.status_line =
+                        Some("that file isn't a Crane-supported architecture".to_string());
                 }
             }
         }
         Tab::Search => {
-            let Some(candidate) = app.browser.search_results.get(app.browser.selected).cloned() else {
+            let Some(candidate) = app
+                .browser
+                .search_results
+                .get(app.browser.selected)
+                .cloned()
+            else {
                 return;
             };
             if !matches!(candidate.classification, Classification::Supported { .. }) {
-                app.status_line = Some("that repo isn't a Crane-supported architecture".to_string());
+                app.status_line =
+                    Some("that repo isn't a Crane-supported architecture".to_string());
             } else if let Some(gguf_file) = candidate.gguf_files.first() {
                 crate::screens::download::start_hf(app, &candidate.repo_id, gguf_file);
             } else {
-                app.status_line = Some(format!("{}: no .gguf file found in this repo to download", candidate.repo_id));
+                app.status_line = Some(format!(
+                    "{}: no .gguf file found in this repo to download",
+                    candidate.repo_id
+                ));
             }
         }
         Tab::Catalog => {
-            let Some(catalog) = &app.browser.catalog else { return };
+            let Some(catalog) = &app.browser.catalog else {
+                return;
+            };
             let Some(model) = catalog.models.get(app.browser.selected).cloned() else {
                 return;
             };
@@ -191,8 +205,12 @@ fn select_current(app: &mut App) {
 }
 
 pub fn render(app: &mut App, frame: &mut Frame) {
-    let [tabs_area, body, footer] =
-        Layout::vertical([Constraint::Length(1), Constraint::Min(3), Constraint::Length(1)]).areas(frame.area());
+    let [tabs_area, body, footer] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(3),
+        Constraint::Length(1),
+    ])
+    .areas(frame.area());
 
     let titles = ["Catalog", "Local", "Search"];
     let selected_tab = match app.browser.tab {
@@ -200,7 +218,12 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         Tab::Local => 1,
         Tab::Search => 2,
     };
-    frame.render_widget(Tabs::new(titles).select(selected_tab).highlight_style(Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)), tabs_area);
+    frame.render_widget(
+        Tabs::new(titles)
+            .select(selected_tab)
+            .highlight_style(Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        tabs_area,
+    );
 
     match app.browser.tab {
         Tab::Catalog => render_catalog(app, frame, body),
@@ -209,18 +232,25 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     }
 
     let footer_text = if app.browser.editing_query {
-        format!("search: {}_   [Enter] run   [Esc] cancel", app.browser.search_query)
+        format!(
+            "search: {}_   [Enter] run   [Esc] cancel",
+            app.browser.search_query
+        )
     } else if let Some(status) = &app.status_line {
         status.clone()
     } else {
-        "[Tab] switch tab   [\u{2191}\u{2193}] move   [Enter] select   [/] search   [Esc] back".to_string()
+        "[Tab] switch tab   [\u{2191}\u{2193}] move   [Enter] select   [/] search   [Esc] back"
+            .to_string()
     };
     frame.render_widget(Paragraph::new(footer_text), footer);
 }
 
 fn render_catalog(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
     let Some(catalog) = &app.browser.catalog else {
-        frame.render_widget(Paragraph::new("loading catalog…").block(Block::bordered()), area);
+        frame.render_widget(
+            Paragraph::new("loading catalog…").block(Block::bordered()),
+            area,
+        );
         return;
     };
     let items: Vec<ListItem> = catalog
@@ -231,7 +261,10 @@ fn render_catalog(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
             let variants = model.variants.len();
             styled_item(
                 i == app.browser.selected,
-                format!("{} — {} ({variants} variant(s))", model.id, model.display_name),
+                format!(
+                    "{} — {} ({variants} variant(s))",
+                    model.id, model.display_name
+                ),
             )
         })
         .collect();
@@ -241,7 +274,10 @@ fn render_catalog(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
 
 fn render_local(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
     if app.browser.local.is_empty() {
-        frame.render_widget(Paragraph::new("no local models found (scanning…)").block(Block::bordered()), area);
+        frame.render_widget(
+            Paragraph::new("no local models found (scanning…)").block(Block::bordered()),
+            area,
+        );
         return;
     }
     let items: Vec<ListItem> = app
@@ -251,10 +287,16 @@ fn render_local(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
         .enumerate()
         .map(|(i, candidate)| {
             let (glyph, note) = classification_note(&candidate.classification);
-            styled_item(i == app.browser.selected, format!("{glyph} {}{note}", candidate.path.display()))
+            styled_item(
+                i == app.browser.selected,
+                format!("{glyph} {}{note}", candidate.path.display()),
+            )
         })
         .collect();
-    frame.render_widget(List::new(items).block(Block::bordered().title("Local models")), area);
+    frame.render_widget(
+        List::new(items).block(Block::bordered().title("Local models")),
+        area,
+    );
 }
 
 fn render_search(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
@@ -263,7 +305,10 @@ fn render_search(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
         return;
     }
     if app.browser.search_results.is_empty() {
-        frame.render_widget(Paragraph::new("press [/] to search HuggingFace").block(Block::bordered()), area);
+        frame.render_widget(
+            Paragraph::new("press [/] to search HuggingFace").block(Block::bordered()),
+            area,
+        );
         return;
     }
     let items: Vec<ListItem> = app
@@ -274,10 +319,16 @@ fn render_search(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
         .map(|(i, candidate)| {
             let (glyph, note) = classification_note(&candidate.classification);
             let gated = if candidate.gated { " [gated]" } else { "" };
-            styled_item(i == app.browser.selected, format!("{glyph} {}{gated}{note}", candidate.repo_id))
+            styled_item(
+                i == app.browser.selected,
+                format!("{glyph} {}{gated}{note}", candidate.repo_id),
+            )
         })
         .collect();
-    frame.render_widget(List::new(items).block(Block::bordered().title("HuggingFace search")), area);
+    frame.render_widget(
+        List::new(items).block(Block::bordered().title("HuggingFace search")),
+        area,
+    );
 }
 
 fn classification_note(classification: &Classification) -> (&'static str, String) {

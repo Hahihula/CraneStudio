@@ -81,3 +81,92 @@ pub fn classify_gguf_architecture(arch: &str) -> Classification {
         },
     }
 }
+
+/// Last-resort override for the one real ambiguity content-based
+/// classification can't resolve on its own: `MiniCPM5` checkpoints declare
+/// themselves plain `"llama"` (see `architecture::from_path_name`'s docs).
+/// Gated tightly — only fires when classification specifically detected
+/// `"llama"`, never for any other unsupported architecture — so a
+/// coincidental "minicpm" substring elsewhere in a path can't misclassify
+/// an actual Llama checkpoint as supported.
+#[must_use]
+pub fn apply_path_hint(classification: Classification, path_hint: &str) -> Classification {
+    let Classification::Unsupported {
+        detected: Some(detected),
+        ..
+    } = &classification
+    else {
+        return classification;
+    };
+    if !detected.eq_ignore_ascii_case("llama") {
+        return classification;
+    }
+    architecture::from_path_name(path_hint).map_or(classification, |family| {
+        Classification::Supported {
+            model_type: family.model_type,
+            vision: family.vision,
+            gated: family.gated,
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn detected_llama() -> Classification {
+        Classification::Unsupported {
+            detected: Some("llama".to_string()),
+            reason: "Crane does not support this architecture (llama)".to_string(),
+        }
+    }
+
+    #[test]
+    fn llama_under_a_minicpm_path_is_reclassified_as_supported() {
+        let result = apply_path_hint(detected_llama(), "openbmb/MiniCPM5-1B-GGUF");
+        assert!(matches!(
+            result,
+            Classification::Supported {
+                model_type: "minicpm5",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn llama_under_an_unrelated_path_stays_unsupported() {
+        let result = apply_path_hint(detected_llama(), "meta-llama/Llama-3.2-1B");
+        assert!(matches!(result, Classification::Unsupported { .. }));
+    }
+
+    #[test]
+    fn a_non_llama_unsupported_verdict_is_never_touched() {
+        let mistral = Classification::Unsupported {
+            detected: Some("mistral".to_string()),
+            reason: "Crane does not support this architecture (mistral)".to_string(),
+        };
+        let result = apply_path_hint(mistral, "some/minicpm-flavored-repo-name");
+        assert!(matches!(result, Classification::Unsupported { .. }));
+    }
+
+    #[test]
+    fn supported_and_unknown_verdicts_pass_through_unchanged() {
+        let supported = Classification::Supported {
+            model_type: "qwen3_5",
+            vision: false,
+            gated: false,
+        };
+        assert_eq!(
+            apply_path_hint(supported.clone(), "anything/minicpm"),
+            supported
+        );
+
+        let unknown = Classification::Unknown {
+            reason: "no config.json".to_string(),
+        };
+        assert_eq!(
+            apply_path_hint(unknown.clone(), "anything/minicpm"),
+            unknown
+        );
+    }
+}

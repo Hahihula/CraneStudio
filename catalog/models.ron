@@ -41,5 +41,190 @@
                 ),
             ],
         ),
+        (
+            id: "qwen3.5-4b",
+            display_name: "Qwen 3.5 4B",
+            family: "qwen3_5",
+            model_type: "qwen3_5",
+            params: 4000000000,
+            native_context: 262144,
+            capabilities: [Text, Tools],
+            license: "apache-2.0",
+            gated: false,
+            supports: (
+                isq: true,
+                kv_quant: true,
+                kv_swap: false,
+                vision: false,
+            ),
+            variants: [
+                (
+                    id: "qwen3.5-4b-q6_k",
+                    repo: "unsloth/Qwen3.5-4B-GGUF",
+                    revision: "e87f176479d0855a907a41277aca2f8ee7a09523",
+                    files: ["Qwen3.5-4B-Q6_K.gguf"],
+                    format: Gguf,
+                    quant: Some("Q6_K"),
+                    download_bytes: 3525956768,
+                    // Smoke-tested only (health check + a real chat
+                    // completion) — no depth run yet.
+                    measured: {},
+                ),
+            ],
+        ),
+        (
+            id: "qwen3.5-9b",
+            display_name: "Qwen 3.5 9B",
+            family: "qwen3_5",
+            model_type: "qwen3_5",
+            params: 9000000000,
+            native_context: 262144,
+            // The exact model PLAN.md §7.0's worked example is built around.
+            capabilities: [Text, Tools],
+            license: "apache-2.0",
+            gated: false,
+            supports: (
+                isq: true,
+                kv_quant: true,
+                kv_swap: false,
+                vision: false,
+            ),
+            variants: [
+                (
+                    id: "qwen3.5-9b-q8_0",
+                    repo: "unsloth/Qwen3.5-9B-GGUF",
+                    revision: "3885219b6810b007914f3a7950a8d1b469d598a5",
+                    files: ["Qwen3.5-9B-Q8_0.gguf"],
+                    format: Gguf,
+                    quant: Some("Q8_0"),
+                    download_bytes: 9527502048,
+                    // Smoke-tested only (health check + a real chat
+                    // completion) — no depth run yet.
+                    measured: {},
+                ),
+            ],
+        ),
+        (
+            id: "qwen3.8-27b",
+            display_name: "Qwen 3.8 27B",
+            family: "qwen3_5",
+            model_type: "qwen3_5",
+            // Same hybrid GDN + attention architecture as Qwen 3.5, scaled
+            // up — declares `model_type: "qwen3_5"` on real checkpoints
+            // (§2.12), so it launches with the same `--model-type qwen3_5`.
+            params: 27000000000,
+            native_context: 262144,
+            capabilities: [Text, Tools],
+            license: "apache-2.0",
+            gated: false,
+            supports: (
+                isq: true,
+                kv_quant: true,
+                kv_swap: false,
+                vision: false,
+            ),
+            variants: [
+                (
+                    id: "qwen3.8-27b-q5_k_s",
+                    repo: "unsloth/Qwen3.8-27B-GGUF",
+                    revision: "f1bfb127c64f7072bdd2cad55f258b9c8b2910fe",
+                    files: ["Qwen3.8-27B-Q5_K_S.gguf"],
+                    format: Gguf,
+                    quant: Some("Q5_K_S"),
+                    download_bytes: 19270036448,
+                    // Smoke-tested only (health check + a real chat
+                    // completion) — no depth run yet.
+                    measured: {},
+                ),
+            ],
+        ),
+        (
+            id: "minicpm5-1b",
+            display_name: "MiniCPM5 1B",
+            family: "minicpm5",
+            // Real checkpoints declare `model_type: "llama"` in
+            // `config.json` (and `general.architecture: "llama"` in GGUF
+            // headers) — indistinguishable from an actual Llama checkpoint
+            // by content alone, so this is never auto-detected
+            // (`catalog::architecture` deliberately has no Minicpm5 entry,
+            // to avoid misclassifying real Llama models as supported).
+            // `--model-type minicpm5` is set explicitly here instead —
+            // exactly the case a curated catalog entry exists for.
+            model_type: "minicpm5",
+            params: 1080632832,
+            native_context: 131072,
+            capabilities: [Text],
+            license: "apache-2.0",
+            gated: false,
+            supports: (
+                isq: true,
+                // Qwen 3.5-family-only (§2.8) — MiniCPM5 is a plain dense
+                // architecture, not the hybrid GDN family.
+                kv_quant: false,
+                kv_swap: false,
+                vision: false,
+            ),
+            variants: [
+                (
+                    id: "minicpm5-1b-q8_0",
+                    repo: "openbmb/MiniCPM5-1B-GGUF",
+                    revision: "3d55fac80935ae6456986ad2384b5cbcc4d6c948",
+                    files: ["MiniCPM5-1B-Q8_0.gguf"],
+                    format: Gguf,
+                    quant: Some("Q8_0"),
+                    download_bytes: 1153529216,
+                    // Smoke-tested only (health check + a real chat
+                    // completion, via the explicit --model-type above) —
+                    // no depth run yet.
+                    measured: {},
+                ),
+            ],
+        ),
+        (
+            id: "minicpm-v-4.6",
+            display_name: "MiniCPM-V 4.6",
+            family: "minicpmv4_6",
+            model_type: "minicpmv4_6",
+            params: 1300428016,
+            // Shares the same hybrid GDN + attention text tower as Qwen 3.5
+            // under `text_config` (verified against a real checkpoint), but
+            // — like Qwen 3.5 VL (§2.12) — never ships as GGUF, so this is
+            // safetensors-only.
+            native_context: 262144,
+            capabilities: [Text, Vision],
+            license: "apache-2.0",
+            gated: false,
+            supports: (
+                // Rejects `--quant`, same as every VL family in §2.12's
+                // table — not verified live for this specific family, kept
+                // conservative rather than assumed.
+                isq: false,
+                kv_quant: false,
+                kv_swap: false,
+                vision: true,
+            ),
+            variants: [
+                (
+                    id: "minicpm-v-4.6",
+                    repo: "openbmb/MiniCPM-V-4.6",
+                    revision: "36f34a661a4bd35d0dc2294cb044d2584646c7d3",
+                    files: [
+                        "config.json",
+                        "generation_config.json",
+                        "model.safetensors",
+                        "preprocessor_config.json",
+                        "tokenizer.json",
+                        "tokenizer_config.json",
+                        "chat_template.jinja",
+                    ],
+                    format: Safetensors,
+                    quant: None,
+                    download_bytes: 2620969214,
+                    // Smoke-tested only (health check + a real vision chat
+                    // completion with an actual image) — no depth run yet.
+                    measured: {},
+                ),
+            ],
+        ),
     ],
 )

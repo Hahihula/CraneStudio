@@ -29,15 +29,26 @@ impl State {
 }
 
 pub fn render(app: &mut App, frame: &mut Frame) {
-    let [header, body, footer] =
-        Layout::vertical([Constraint::Length(2), Constraint::Min(3), Constraint::Length(1)]).areas(frame.area());
+    let [header, body, footer] = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Min(3),
+        Constraint::Length(1),
+    ])
+    .areas(frame.area());
 
     frame.render_widget(
-        Paragraph::new(Line::from(Span::styled("Server running", Style::new().fg(Color::Green).add_modifier(Modifier::BOLD)))),
+        Paragraph::new(Line::from(Span::styled(
+            "Server running",
+            Style::new().fg(Color::Green).add_modifier(Modifier::BOLD),
+        ))),
         header,
     );
 
-    let state = app.connect.id.and_then(|id| app.last_running.iter().find(|c| c.info.id == id)).map(|c| &c.state);
+    let state = app
+        .connect
+        .id
+        .and_then(|id| app.last_running.iter().find(|c| c.info.id == id))
+        .map(|c| &c.state);
 
     let status_line = match state {
         Some(ChildState::Healthy) => "\u{25cf} healthy — ready for requests",
@@ -57,7 +68,15 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         Line::from("Point any OpenAI-compatible client (coding agent, curl, SDK) at the base URL above."),
         Line::from("Example: curl http://127.0.0.1:PORT/v1/chat/completions -d '{\"model\":\"NAME\",\"messages\":[...]}'".replace("PORT", &app.connect.gateway_port.to_string()).replace("NAME", &app.connect.name)),
     ];
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(Block::bordered()), body);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(Block::bordered()),
+        body,
+    );
 
-    frame.render_widget(Paragraph::new("[r] open chat playground   [h] home   [q] quit"), footer);
+    frame.render_widget(
+        Paragraph::new("[r] open chat playground   [h] home   [q] quit"),
+        footer,
+    );
 }

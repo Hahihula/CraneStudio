@@ -10,7 +10,36 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Default system prompt for the chat playground (§4.6) — small models left
+/// with no language guidance at all have been observed drifting into a
+/// single language regardless of what the user writes in.
+pub const DEFAULT_SYSTEM_PROMPT: &str = "Respond in the same language the user writes in.";
+
+/// crane-serve itself defaults `max_tokens` to 512 when a request omits it
+/// (`openai_api.rs`'s `default_max_tokens`) — too low for anything beyond a
+/// short reply (verified live: a multi-file code answer got hard-cut mid
+/// sentence). The server clamps whatever it's sent to the model's actual
+/// remaining context, so a generous default here costs nothing on requests
+/// that don't need it.
+pub const DEFAULT_MAX_TOKENS: usize = 4096;
+
+/// Mirrors crane-serve's own fallback (`openai.rs`'s handler) when a request
+/// omits `temperature`, so sending it explicitly changes nothing by default.
+pub const DEFAULT_TEMPERATURE: f64 = 0.8;
+
+fn default_system_prompt() -> String {
+    DEFAULT_SYSTEM_PROMPT.to_string()
+}
+
+fn default_max_tokens() -> usize {
+    DEFAULT_MAX_TOKENS
+}
+
+fn default_temperature() -> f64 {
+    DEFAULT_TEMPERATURE
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// `HuggingFace` access token, for gated repos (§9). Never logged.
     #[serde(default)]
@@ -20,6 +49,30 @@ pub struct Config {
     /// no prompt is shown and nothing is ever uploaded in v1.
     #[serde(default)]
     pub telemetry: Telemetry,
+    /// System prompt sent with every chat playground request (§4.6),
+    /// editable from the chat screen and remembered as "last used" here.
+    #[serde(default = "default_system_prompt")]
+    pub system_prompt: String,
+    /// `max_tokens` sent with every chat playground request, editable from
+    /// the chat screen (`Ctrl-L`) and remembered as "last used" here.
+    #[serde(default = "default_max_tokens")]
+    pub max_tokens: usize,
+    /// `temperature` sent with every chat playground request, editable from
+    /// the chat screen (`Ctrl-T`) and remembered as "last used" here.
+    #[serde(default = "default_temperature")]
+    pub temperature: f64,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            hf_token: None,
+            telemetry: Telemetry::default(),
+            system_prompt: default_system_prompt(),
+            max_tokens: default_max_tokens(),
+            temperature: default_temperature(),
+        }
+    }
 }
 
 /// §7.3's telemetry consent state — `Unasked` today and for the whole of
@@ -89,6 +142,9 @@ mod tests {
         let loaded = Config::load(&path);
         assert_eq!(loaded.hf_token.as_deref(), Some("hf_secret"));
         assert_eq!(loaded.telemetry, Telemetry::Unasked);
+        assert_eq!(loaded.system_prompt, DEFAULT_SYSTEM_PROMPT);
+        assert_eq!(loaded.max_tokens, DEFAULT_MAX_TOKENS);
+        assert!((loaded.temperature - DEFAULT_TEMPERATURE).abs() < f64::EPSILON);
 
         #[cfg(unix)]
         {
@@ -102,5 +158,20 @@ mod tests {
     fn missing_file_loads_as_empty_default() {
         let config = Config::load(Path::new("/does/not/exist/config.ron"));
         assert_eq!(config.hf_token, None);
+        assert_eq!(config.system_prompt, DEFAULT_SYSTEM_PROMPT);
+        assert_eq!(config.max_tokens, DEFAULT_MAX_TOKENS);
+        assert!((config.temperature - DEFAULT_TEMPERATURE).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn a_config_file_written_before_system_prompt_existed_still_loads() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("config.ron");
+        fs::write(&path, "(hf_token: None, telemetry: Unasked)").unwrap();
+
+        let config = Config::load(&path);
+        assert_eq!(config.system_prompt, DEFAULT_SYSTEM_PROMPT);
+        assert_eq!(config.max_tokens, DEFAULT_MAX_TOKENS);
+        assert!((config.temperature - DEFAULT_TEMPERATURE).abs() < f64::EPSILON);
     }
 }
