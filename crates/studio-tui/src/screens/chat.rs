@@ -1,31 +1,46 @@
-//! The chat playground (§4.6): talk to whatever's running behind the
-//! gateway's stable base URL, streamed token-by-token — the same `/v1/*`
-//! path any external client would use (§3.2), so this screen is also a
-//! live smoke test of the connect instructions on the previous screen.
+//! The chat app (§4.6): talk to whatever's running behind the gateway's stable
+//! base URL, streamed token-by-token — the same `/v1/*` path any external
+//! client would use (§3.2), so this screen is also a live smoke test of the
+//! endpoint panel on the ready screen.
 //!
-//! Vision models (MiniCPM-V 4.6 et al.) reject *every* request with no
-//! image, not just the first (verified live: the requirement is checked
-//! per-request, not once per conversation) — so `Ctrl-A` attaches a local
-//! image file that stays active and gets resent on every turn until
-//! replaced or cleared (Ctrl-A with an empty path), the one real thing a
-//! VL model needs that a plain chat box doesn't have. For a plain-text
-//! turn with no image attached, a failed request is automatically retried
-//! once with a blank placeholder image (`PLACEHOLDER_IMAGE_DATA_URL`) —
-//! satisfies the model's requirement without making every text-only
-//! conversation start with "attach a picture first."
+//! Vision models (MiniCPM-V 4.6 et al.) reject *every* request with no image,
+//! not just the first (verified live: the requirement is checked per-request,
+//! not once per conversation) — so `Ctrl-A` attaches a local image file that
+//! stays active and gets resent on every turn until replaced or cleared
+//! (`Ctrl-A` with an empty path), the one real thing a VL model needs that a
+//! plain chat box doesn't have. For a plain-text turn with no image attached, a
+//! failed request is automatically retried once with a blank placeholder image
+//! (`PLACEHOLDER_IMAGE_DATA_URL`) — satisfies the model's requirement without
+//! making every text-only conversation start with "attach a picture first."
 
 use std::path::PathBuf;
+use std::time::Instant;
 
 use base64::Engine as _;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use futures_util::StreamExt as _;
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Wrap};
+use ratatui::widgets::Paragraph;
+use tokio::task::AbortHandle;
 
 use crate::app::{App, BackgroundEvent, Screen};
+use crate::theme::glyph;
+use crate::ui::{self, Chrome, Message};
+
+const HINTS: &[(&str, &str)] = &[
+    ("⏎", "send"),
+    ("^a", "image"),
+    ("^p", "system"),
+    ("^l", "max tokens"),
+    ("^t", "temperature"),
+    ("^n", "new chat"),
+    ("esc", "back"),
+];
+const STREAMING_HINTS: &[(&str, &str)] = &[("esc", "stop"), ("^c", "quit")];
+const EDIT_HINTS: &[(&str, &str)] = &[("⏎", "save"), ("esc", "cancel")];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -53,24 +68,37 @@ pub struct State {
     pub messages: Vec<(Role, String)>,
     pub input: String,
     pub mode: InputMode,
-    /// Set by `Ctrl-A`, resent with *every* subsequent message until
-    /// replaced or cleared — vision models need one in every request, not
-    /// just the first (see module docs).
+    /// Set by `Ctrl-A`, resent with *every* subsequent message until replaced or
+    /// cleared — vision models need one in every request, not just the first
+    /// (see module docs).
     pub active_image: Option<PathBuf>,
-    /// Sent as a `"system"` message with every request (§4.6). Editable
-    /// with `Ctrl-P`; remembered across sessions via `config.ron` — see
+    /// Sent as a `"system"` message with every request (§4.6). Editable with
+    /// `Ctrl-P`; remembered across sessions via `config.ron` — see
     /// `set_system_prompt`.
     pub system_prompt: String,
-    /// Sent as `max_tokens` with every request — crane-serve's own default
-    /// (512) is too low for anything beyond a short reply (verified live: a
-    /// multi-file code answer got cut off mid sentence). Editable with
-    /// `Ctrl-L`; remembered via `config.ron`.
+    /// Sent as `max_tokens` with every request — crane-serve's own default (512)
+    /// is too low for anything beyond a short reply (verified live: a multi-file
+    /// code answer got cut off mid sentence). Editable with `Ctrl-L`;
+    /// remembered via `config.ron`.
     pub max_tokens: usize,
     /// Sent as `temperature` with every request. Editable with `Ctrl-T`;
     /// remembered via `config.ron`.
     pub temperature: f64,
     pub streaming: bool,
     pub error: Option<String>,
+    /// Transcript scroll, in wrapped rows from the top.
+    pub scroll: u16,
+    /// While true the transcript follows the newest line; any manual scroll
+    /// turns it off until the user jumps back to the end.
+    pub follow: bool,
+    /// Deltas seen and how long they took — the "feel the tokens/sec" readout
+    /// §4.6 asks for. One delta is one token in every backend we drive.
+    stream_started: Option<Instant>,
+    stream_tokens: usize,
+    pub last_tps: Option<f64>,
+    /// Lets `Esc` stop a generation instead of only being a way out of the
+    /// screen — a runaway 4096-token answer is otherwise unstoppable.
+    stream_task: Option<AbortHandle>,
     last_delta_kind: Option<DeltaKind>,
 }
 
@@ -97,15 +125,21 @@ impl State {
             temperature,
             streaming: false,
             error: None,
+            scroll: 0,
+            follow: true,
+            stream_started: None,
+            stream_tokens: 0,
+            last_tps: None,
+            stream_task: None,
             last_delta_kind: None,
         }
     }
 
-    /// Reasoning models (`MiniCPM5` et al. — verified live) stream their
-    /// whole answer through `reasoning_content`, sometimes never touching
-    /// `content` at all. Both are shown — hiding reasoning left the chat
-    /// window blank for an entire real response — but labelled apart, so
-    /// a rambling chain-of-thought doesn't read as a broken/garbled reply.
+    /// Reasoning models (`MiniCPM5` et al. — verified live) stream their whole
+    /// answer through `reasoning_content`, sometimes never touching `content` at
+    /// all. Both are shown — hiding reasoning left the chat window blank for an
+    /// entire real response — but labelled apart, so a rambling chain-of-thought
+    /// doesn't read as a broken/garbled reply.
     pub fn apply_delta(&mut self, role_started: bool, kind: DeltaKind, text: &str) {
         if role_started || !matches!(self.messages.last(), Some((Role::Assistant, _))) {
             let marker = if kind == DeltaKind::Reasoning {
@@ -126,27 +160,84 @@ impl State {
             content.push_str(text);
         }
         self.last_delta_kind = Some(kind);
+        self.stream_tokens += 1;
+        self.follow = true;
     }
 
     pub fn finish_turn(&mut self) {
+        #[allow(clippy::cast_precision_loss)]
+        if let Some(started) = self.stream_started {
+            let elapsed = started.elapsed().as_secs_f64();
+            if elapsed > 0.0 && self.stream_tokens > 0 {
+                self.last_tps = Some(self.stream_tokens as f64 / elapsed);
+            }
+        }
         self.streaming = false;
+        self.stream_task = None;
     }
 
     pub fn fail_turn(&mut self, err: &str) {
         self.streaming = false;
+        self.stream_task = None;
         self.error = Some(err.to_string());
+    }
+
+    fn begin_turn(&mut self) {
+        self.streaming = true;
+        self.stream_started = Some(Instant::now());
+        self.stream_tokens = 0;
+        self.follow = true;
+    }
+
+    /// Live tokens/second while streaming, or the last completed turn's rate.
+    #[must_use]
+    pub fn tokens_per_second(&self) -> Option<f64> {
+        if self.streaming {
+            #[allow(clippy::cast_precision_loss)]
+            let elapsed = self.stream_started?.elapsed().as_secs_f64();
+            if elapsed <= 0.0 || self.stream_tokens == 0 {
+                return None;
+            }
+            #[allow(clippy::cast_precision_loss)]
+            return Some(self.stream_tokens as f64 / elapsed);
+        }
+        self.last_tps
     }
 }
 
 pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
     match key.code {
         KeyCode::Esc => {
-            if app.chat.mode == InputMode::Message {
-                app.screen = Screen::Connect;
+            if app.chat.streaming {
+                stop_streaming(app);
+            } else if app.chat.mode == InputMode::Message {
+                app.screen = Screen::Ready;
             } else {
                 app.chat.mode = InputMode::Message;
                 app.chat.input.clear();
             }
+            true
+        }
+        KeyCode::PageUp => {
+            app.chat.follow = false;
+            app.chat.scroll = app.chat.scroll.saturating_sub(5);
+            true
+        }
+        KeyCode::PageDown => {
+            app.chat.scroll = app.chat.scroll.saturating_add(5);
+            true
+        }
+        KeyCode::End => {
+            app.chat.follow = true;
+            true
+        }
+        KeyCode::Char('n')
+            if key.modifiers.contains(KeyModifiers::CONTROL) && !app.chat.streaming =>
+        {
+            app.chat.messages.clear();
+            app.chat.error = None;
+            app.chat.scroll = 0;
+            app.chat.follow = true;
             true
         }
         KeyCode::Char('a')
@@ -203,6 +294,16 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
     }
 }
 
+/// Aborts the streaming task and keeps whatever text already arrived — a
+/// stopped answer is still an answer, and the conversation stays usable.
+fn stop_streaming(app: &mut App) {
+    if let Some(handle) = app.chat.stream_task.take() {
+        handle.abort();
+    }
+    app.chat.finish_turn();
+    app.message = Some(Message::info("stopped generating"));
+}
+
 fn attach_image(app: &mut App) {
     let trimmed = app.chat.input.trim();
     if trimmed.is_empty() {
@@ -229,8 +330,8 @@ fn save_config(mutate: impl FnOnce(&mut studio_core::config::Config)) {
     let _ = config.save(&path);
 }
 
-/// Saves the edited system prompt both to live state and to `config.ron`,
-/// so it's remembered as "last used" next time the chat screen opens.
+/// Saves the edited system prompt both to live state and to `config.ron`, so
+/// it's remembered as "last used" next time the chat screen opens.
 fn set_system_prompt(app: &mut App) {
     let text = app.chat.input.trim().to_string();
     app.chat.system_prompt.clone_from(&text);
@@ -239,8 +340,8 @@ fn set_system_prompt(app: &mut App) {
     save_config(|c| c.system_prompt = text);
 }
 
-/// Saves the edited `max_tokens` both to live state and to `config.ron`.
-/// An invalid entry is reported and left unchanged, matching `attach_image`'s
+/// Saves the edited `max_tokens` both to live state and to `config.ron`. An
+/// invalid entry is reported and left unchanged, matching `attach_image`'s
 /// "report and fall through to Message mode" behaviour.
 fn set_max_tokens(app: &mut App) {
     let trimmed = app.chat.input.trim();
@@ -271,14 +372,14 @@ fn set_temperature(app: &mut App) {
     app.chat.mode = InputMode::Message;
 }
 
-/// A 1×1 PNG, used as a placeholder `image_url` when a vision model
-/// demands one but the user just wants a plain-text reply — see the
-/// module docs' automatic-retry note.
+/// A 1×1 PNG, used as a placeholder `image_url` when a vision model demands one
+/// but the user just wants a plain-text reply — see the module docs' automatic
+/// retry note.
 const PLACEHOLDER_IMAGE_DATA_URL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
-/// `data:` URL for a local image file — the one thing `image_url` content
-/// blocks need, since a local chat playground has nothing to host the file
-/// at a real URL for the model to fetch.
+/// `data:` URL for a local image file — the one thing `image_url` content blocks
+/// need, since a local chat playground has nothing to host the file at a real
+/// URL for the model to fetch.
 fn image_data_url(path: &std::path::Path) -> Result<String, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mime = match path
@@ -320,7 +421,7 @@ fn submit(app: &mut App) {
     };
 
     app.chat.messages.push((Role::User, text.clone()));
-    app.chat.streaming = true;
+    app.chat.begin_turn();
 
     let system_prompt = app.chat.system_prompt.trim().to_string();
     let mut history: Vec<(&'static str, String, Option<String>)> = Vec::new();
@@ -339,20 +440,20 @@ fn submit(app: &mut App) {
         )
     }));
     // The active image is resent with *every* turn while it's set (see
-    // `active_image`'s docs) — attaching it only to earlier history would
-    // still fail a model that checks every request for one.
+    // `active_image`'s docs) — attaching it only to earlier history would still
+    // fail a model that checks every request for one.
     if let Some(last) = history.last_mut() {
         last.2 = image_url;
     }
 
-    let model = app.connect.name.clone();
+    let model = app.ready.name.clone();
     let gateway_base = app.gateway_base();
     let tx = app.sender();
     let had_image = history.last().is_some_and(|(_, _, img)| img.is_some());
     let max_tokens = app.chat.max_tokens;
     let temperature = app.chat.temperature;
 
-    tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         let outcome = match stream_chat(
             &gateway_base,
             &model,
@@ -363,10 +464,10 @@ fn submit(app: &mut App) {
         )
         .await
         {
-            // A vision model rejected a plain-text turn — retry once with
-            // a placeholder image instead of bothering the user, unless
-            // they'd already attached a real one (then there's nothing a
-            // retry would change).
+            // A vision model rejected a plain-text turn — retry once with a
+            // placeholder image instead of bothering the user, unless they'd
+            // already attached a real one (then there's nothing a retry would
+            // change).
             Err(SendError::NeedsImage) if !had_image => {
                 if let Some(last) = history.last_mut() {
                     last.2 = Some(PLACEHOLDER_IMAGE_DATA_URL.to_string());
@@ -398,12 +499,13 @@ fn submit(app: &mut App) {
             }
         }
     });
+    app.chat.stream_task = Some(task.abort_handle());
 }
 
 enum SendError {
-    /// The backend rejected the request specifically because a vision
-    /// model found no `image_url` anywhere in it — distinguished from a
-    /// generic failure so the caller can retry with a placeholder.
+    /// The backend rejected the request specifically because a vision model
+    /// found no `image_url` anywhere in it — distinguished from a generic
+    /// failure so the caller can retry with a placeholder.
     NeedsImage,
     Other(String),
 }
@@ -495,10 +597,9 @@ async fn stream_chat(
     }
 
     // Some backends (crane-serve's vision path, at least today) ignore
-    // `"stream": true` outright and send one plain completion object
-    // instead of SSE framing — never hit the "data: " branch above at all.
-    // Treat that the same as a one-chunk stream rather than silently
-    // showing nothing.
+    // `"stream": true` outright and send one plain completion object instead of
+    // SSE framing — never hit the "data: " branch above at all. Treat that the
+    // same as a one-chunk stream rather than silently showing nothing.
     if !saw_sse {
         let trimmed = buf.trim();
         if !trimmed.is_empty() {
@@ -530,94 +631,218 @@ async fn stream_chat(
 }
 
 pub fn render(app: &mut App, frame: &mut Frame) {
-    let [header, body, input_area, footer] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Min(3),
-        Constraint::Length(3),
-        Constraint::Length(1),
-    ])
-    .areas(frame.area());
+    let hints = match (app.chat.streaming, app.chat.mode) {
+        (true, _) => STREAMING_HINTS,
+        (false, InputMode::Message) => HINTS,
+        (false, _) => EDIT_HINTS,
+    };
+    let chrome = Chrome::new(hints)
+        .crumb("Chat")
+        .crumb(crate::ui::text::truncate(&app.ready.name, 24))
+        .status(status_spans(app))
+        .message(app.message.clone());
+    let body = ui::shell(frame, &app.theme, &chrome);
+
+    let [transcript, input] =
+        Layout::vertical([Constraint::Min(4), Constraint::Length(3)]).areas(body);
+    render_transcript(app, frame, transcript);
+    render_input(app, frame, input);
+}
+
+/// `temp 0.8 · max 4096 · 38 tok/s` — the settings in force and the rate the
+/// model is actually managing, which is the number this screen exists to show.
+fn status_spans(app: &App) -> Vec<Span<'static>> {
+    let mut spans = vec![Span::styled(
+        format!(
+            "temp {}  ·  max {}",
+            app.chat.temperature, app.chat.max_tokens
+        ),
+        app.theme.muted_style(),
+    )];
+    if let Some(tps) = app.chat.tokens_per_second() {
+        spans.push(Span::styled("  ·  ", app.theme.muted_style()));
+        spans.push(Span::styled(
+            format!("{tps:.0} tok/s"),
+            Style::new()
+                .fg(app.theme.accent_alt)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    spans
+}
+
+fn render_transcript(app: &mut App, frame: &mut Frame, area: Rect) {
+    let block = app.theme.block("Conversation");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let lines = transcript_lines(app, inner.width);
+    #[allow(clippy::cast_possible_truncation)]
+    let total = lines.len() as u16;
+    let max_scroll = total.saturating_sub(inner.height);
+    if app.chat.follow {
+        app.chat.scroll = max_scroll;
+    } else {
+        app.chat.scroll = app.chat.scroll.min(max_scroll);
+        if app.chat.scroll == max_scroll {
+            app.chat.follow = true;
+        }
+    }
 
     frame.render_widget(
-        Paragraph::new(Span::styled(
-            format!(
-                "Chat — {}  (temp {}, max_tokens {})",
-                app.connect.name, app.chat.temperature, app.chat.max_tokens
-            ),
-            app.theme.header_style(),
-        )),
-        header,
+        Paragraph::new(lines).scroll((app.chat.scroll, 0)),
+        inner,
     );
+}
 
-    let mut lines: Vec<Line> = Vec::new();
+/// The transcript, already wrapped: each turn gets a colored gutter bar and a
+/// role label, and a model's chain-of-thought is dimmed so it reads as an aside
+/// rather than as the answer.
+fn transcript_lines(app: &App, width: u16) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if app.chat.messages.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            format!("{} say something to {}", glyph::ARROW, app.ready.name),
+            app.theme.muted_style(),
+        )));
+        lines.push(Line::from(Span::styled(
+            "  images with ^a · system prompt with ^p",
+            app.theme
+                .muted_style()
+                .add_modifier(Modifier::DIM | Modifier::ITALIC),
+        )));
+        return lines;
+    }
+
+    let text_width = width.saturating_sub(4).max(8);
     for (role, content) in &app.chat.messages {
         let (label, color) = match role {
             Role::User => ("you", app.theme.accent),
-            Role::Assistant => ("model", app.theme.success),
+            Role::Assistant => ("model", app.theme.accent_alt),
         };
-        lines.push(Line::from(Span::styled(
-            format!("{label}:"),
-            Style::new().fg(color).add_modifier(Modifier::BOLD),
-        )));
-        for line in content.lines() {
-            lines.push(Line::raw(line.to_string()));
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{} ", glyph::BAR_HALF),
+                Style::new().fg(color),
+            ),
+            Span::styled(
+                label,
+                Style::new().fg(color).add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        // `(thinking)` / `(answer)` markers are inserted by `apply_delta` when a
+        // reasoning model switches fields mid-answer. The thinking label earns
+        // its place (that text is an aside, and is dimmed to say so); the
+        // matching `(answer)` marker is just noise in front of the real reply.
+        let content = content.replace("\n(answer) ", "\n");
+        for row in crate::ui::text::wrap(&content, text_width) {
+            let thinking = row.starts_with("(thinking)");
+            let style = if thinking {
+                app.theme
+                    .muted_style()
+                    .add_modifier(Modifier::DIM | Modifier::ITALIC)
+            } else {
+                Style::new().fg(app.theme.text)
+            };
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{} ", glyph::BAR_HALF),
+                    Style::new()
+                        .fg(app.theme.border)
+                        .add_modifier(Modifier::DIM),
+                ),
+                Span::styled(format!(" {row}"), style),
+            ]));
         }
         lines.push(Line::raw(""));
     }
+
     if let Some(err) = &app.chat.error {
-        lines.push(Line::from(Span::styled(
-            format!("error: {err}"),
-            Style::new().fg(app.theme.error),
-        )));
+        for row in crate::ui::text::wrap(err, text_width) {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{} ", glyph::FAILED),
+                    Style::new().fg(app.theme.error),
+                ),
+                Span::styled(row, Style::new().fg(app.theme.error)),
+            ]));
+        }
+    }
+    lines
+}
+
+fn render_input(app: &App, frame: &mut Frame, area: Rect) {
+    let (title, focused) = match (app.chat.streaming, app.chat.mode) {
+        (true, _) => (
+            format!("{} generating", crate::theme::spinner(app.tick)),
+            false,
+        ),
+        (false, InputMode::ImagePath) => ("image path — empty clears it".to_string(), true),
+        (false, InputMode::SystemPrompt) => ("system prompt".to_string(), true),
+        (false, InputMode::MaxTokens) => ("max tokens".to_string(), true),
+        (false, InputMode::Temperature) => ("temperature".to_string(), true),
+        (false, InputMode::Message) => ("message".to_string(), true),
+    };
+
+    let block = app.theme.block_focused(title, focused);
+    let inner = block.inner(area);
+
+    // What's attached / in force, on the panel's bottom border: it belongs to
+    // the input box, and repeating it in the transcript would push the
+    // conversation itself down a line.
+    let mut footnote: Vec<Span<'static>> = Vec::new();
+    let mut budget = inner.width as usize;
+    if let Some(image) = &app.chat.active_image {
+        let text = format!(
+            " image {} ",
+            crate::ui::text::truncate_start(&image.display().to_string(), 24)
+        );
+        budget = budget.saturating_sub(text.chars().count());
+        footnote.push(Span::styled(text, Style::new().fg(app.theme.accent_alt)));
+    }
+    if !app.chat.system_prompt.is_empty() && budget > 16 {
+        footnote.push(Span::styled(
+            format!(
+                " system {} ",
+                crate::ui::text::truncate(&app.chat.system_prompt, budget - 10)
+            ),
+            app.theme.muted_style(),
+        ));
     }
     frame.render_widget(
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .block(app.theme.block("")),
-        body,
+        block.title_bottom(Line::from(footnote).right_aligned()),
+        area,
     );
 
-    let input_title = match (app.chat.streaming, app.chat.mode) {
-        (true, _) => format!("{} generating…", crate::theme::spinner(app.tick)),
-        (false, InputMode::ImagePath) => "image path".to_string(),
-        (false, InputMode::SystemPrompt) => "system prompt (empty clears it)".to_string(),
-        (false, InputMode::MaxTokens) => "max_tokens".to_string(),
-        (false, InputMode::Temperature) => "temperature".to_string(),
-        (false, InputMode::Message) => {
-            let image = app
-                .chat
-                .active_image
-                .as_ref()
-                .map(|path| format!("image active: {}", path.display()));
-            let prompt = (!app.chat.system_prompt.is_empty())
-                .then(|| format!("system: {}", app.chat.system_prompt));
-            match (image, prompt) {
-                (Some(i), Some(p)) => format!("message — {i} — {p}"),
-                (Some(i), None) => format!("message — {i}"),
-                (None, Some(p)) => format!("message — {p}"),
-                (None, None) => "message".to_string(),
-            }
-        }
-    };
-    frame.render_widget(
-        Paragraph::new(format!("{}_", app.chat.input)).block(app.theme.block(input_title)),
-        input_area,
+    let prompt = Span::styled(
+        format!("{} ", glyph::ARROW),
+        Style::new().fg(app.theme.accent),
     );
-
-    // Unlike every other screen, plain characters here are message text, not
-    // shortcuts — 'q' would just get typed — so quitting needs Ctrl-C.
-    let footer_text = match app.chat.mode {
-        InputMode::ImagePath => "[Enter] attach (empty path clears it)   [Esc] cancel",
-        InputMode::SystemPrompt => "[Enter] save (empty clears it)   [Esc] cancel",
-        InputMode::MaxTokens | InputMode::Temperature => "[Enter] save   [Esc] cancel",
-        InputMode::Message => {
-            "[Enter] send   [Ctrl-A] image   [Ctrl-P] system prompt   [Ctrl-L] max_tokens   [Ctrl-T] temperature   [F2] theme   [Esc] back   [Ctrl-C] quit"
-        }
+    // A long line scrolls with the cursor instead of wrapping — a one-row input
+    // that wraps loses the beginning of what you typed.
+    let visible = inner.width.saturating_sub(2) as usize;
+    let text: String = if app.chat.input.chars().count() > visible {
+        app.chat
+            .input
+            .chars()
+            .skip(app.chat.input.chars().count() - visible)
+            .collect()
+    } else {
+        app.chat.input.clone()
     };
+    #[allow(clippy::cast_possible_truncation)]
+    let cursor_x = inner.x + 2 + text.chars().count() as u16;
     frame.render_widget(
-        Paragraph::new(footer_text).style(app.theme.muted_style()),
-        footer,
+        Paragraph::new(Line::from(vec![
+            prompt,
+            Span::styled(text, Style::new().fg(app.theme.text)),
+        ])),
+        inner,
     );
+    if !app.chat.streaming {
+        frame.set_cursor_position((cursor_x.min(inner.right().saturating_sub(1)), inner.y));
+    }
 }
 
 #[cfg(test)]
@@ -688,5 +913,16 @@ mod tests {
                 (Role::Assistant, "second turn".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn a_finished_turn_reports_a_token_rate() {
+        let mut state = State::default();
+        state.begin_turn();
+        state.apply_delta(true, DeltaKind::Content, "one");
+        state.apply_delta(false, DeltaKind::Content, " two");
+        state.finish_turn();
+        assert!(!state.streaming);
+        assert!(state.tokens_per_second().is_some_and(|tps| tps > 0.0));
     }
 }

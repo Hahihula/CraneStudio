@@ -85,7 +85,9 @@ impl Default for Config {
 /// persisted config data like everything else in this file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ThemeName {
+    /// `CraneStudio`'s own palette — the default.
     #[default]
+    Crane,
     Monokai,
     Dracula,
     Plain,
@@ -95,15 +97,17 @@ impl ThemeName {
     #[must_use]
     pub fn next(self) -> Self {
         match self {
+            ThemeName::Crane => ThemeName::Monokai,
             ThemeName::Monokai => ThemeName::Dracula,
             ThemeName::Dracula => ThemeName::Plain,
-            ThemeName::Plain => ThemeName::Monokai,
+            ThemeName::Plain => ThemeName::Crane,
         }
     }
 
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
+            ThemeName::Crane => "Crane",
             ThemeName::Monokai => "Monokai",
             ThemeName::Dracula => "Dracula",
             ThemeName::Plain => "Plain",
@@ -181,7 +185,7 @@ mod tests {
         assert_eq!(loaded.system_prompt, DEFAULT_SYSTEM_PROMPT);
         assert_eq!(loaded.max_tokens, DEFAULT_MAX_TOKENS);
         assert!((loaded.temperature - DEFAULT_TEMPERATURE).abs() < f64::EPSILON);
-        assert_eq!(loaded.theme, ThemeName::Monokai);
+        assert_eq!(loaded.theme, ThemeName::Crane);
 
         #[cfg(unix)]
         {
@@ -198,14 +202,15 @@ mod tests {
         assert_eq!(config.system_prompt, DEFAULT_SYSTEM_PROMPT);
         assert_eq!(config.max_tokens, DEFAULT_MAX_TOKENS);
         assert!((config.temperature - DEFAULT_TEMPERATURE).abs() < f64::EPSILON);
-        assert_eq!(config.theme, ThemeName::Monokai);
+        assert_eq!(config.theme, ThemeName::Crane);
     }
 
     #[test]
-    fn theme_cycles_through_all_three_and_back() {
+    fn theme_cycles_through_every_palette_and_back() {
+        assert_eq!(ThemeName::Crane.next(), ThemeName::Monokai);
         assert_eq!(ThemeName::Monokai.next(), ThemeName::Dracula);
         assert_eq!(ThemeName::Dracula.next(), ThemeName::Plain);
-        assert_eq!(ThemeName::Plain.next(), ThemeName::Monokai);
+        assert_eq!(ThemeName::Plain.next(), ThemeName::Crane);
     }
 
     #[test]

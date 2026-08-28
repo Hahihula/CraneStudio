@@ -1,10 +1,13 @@
-//! The solver-led launch wizard (§4.4): the wizard leads with the answer —
-//! the best reachable context for this model on this hardware — rather
-//! than a blank form of knobs. Operates on local files directly (a `.gguf`
-//! read via its own embedded metadata, or a safetensors dir via its
-//! `config.json`), since that needs no network round trip and covers the
-//! model the user already has on disk, which is the fastest path from
-//! "never used this" to a running server.
+//! The solver-led launch options screen (§4.4). Two ways in:
+//!
+//! * `quick_launch` — the launchpad's `Enter`. Solves, takes the solver's own
+//!   best answer, and starts the model. No screen of its own; the user goes
+//!   straight to `ready`.
+//! * `load_local` + this screen — the launchpad's `c`. Same solve, but shows
+//!   the answer and its alternatives first, because "which trade-off do I
+//!   want" is a real question once you know the defaults exist.
+//!
+//! Either way the screen leads with an answer, never a blank form of knobs.
 #![allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
@@ -15,10 +18,10 @@ use std::fs::File;
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout};
-use ratatui::style::Style;
+use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{List, ListItem, Paragraph};
 use studio_core::catalog::Classification;
 use studio_core::catalog::local::LocalCandidate;
 use studio_core::catalog::schema::{Format, KvQuant};
@@ -31,6 +34,17 @@ use studio_core::launch::LaunchSpec;
 use studio_core::measurement::MeasurementDb;
 
 use crate::app::{App, BackgroundEvent, Screen};
+use crate::models::LocalModel;
+use crate::theme::glyph;
+use crate::ui::bars::{self, ratio};
+use crate::ui::{self, Chrome, Message};
+
+const HINTS: &[(&str, &str)] = &[
+    ("↑↓", "choose"),
+    ("⏎", "start"),
+    ("esc", "back"),
+    ("f2", "theme"),
+];
 
 pub struct State {
     pub candidate: Option<LocalCandidate>,
@@ -41,7 +55,6 @@ pub struct State {
     pub result: Option<SolveResult>,
     pub error: Option<String>,
     pub selected_config: usize,
-    pub launching: bool,
 }
 
 impl Default for State {
@@ -55,24 +68,24 @@ impl Default for State {
             result: None,
             error: None,
             selected_config: 0,
-            launching: false,
         }
     }
 }
 
 /// Reads the model's own dimensions and runs the solver, entirely
 /// synchronously — a GGUF header read or a `config.json` parse plus the
-/// solver's arithmetic both complete in well under a frame's worth of
-/// time, so there's no need to thread this through a background task.
+/// solver's arithmetic both complete in well under a frame's worth of time, so
+/// there's no need to thread this through a background task.
 pub fn load_local(app: &mut App, candidate: &LocalCandidate) {
     app.wizard = State::default();
-    app.status_line = None;
+    app.message = None;
 
     let Classification::Supported { model_type, .. } = &candidate.classification else {
-        app.status_line = Some("that file isn't a Crane-supported architecture".to_string());
+        app.message = Some(Message::error(
+            "that file isn't a Crane-supported architecture",
+        ));
         return;
     };
-    let model_type = (*model_type).to_string();
 
     let variant_label = candidate.path.file_name().map_or_else(
         || candidate.path.display().to_string(),
@@ -80,18 +93,54 @@ pub fn load_local(app: &mut App, candidate: &LocalCandidate) {
     );
 
     app.wizard.candidate = Some(candidate.clone());
-    app.wizard.model_type = model_type;
+    app.wizard.model_type = (*model_type).to_string();
     app.wizard.variant_label.clone_from(&variant_label);
     app.wizard.backend = app.hardware.backend;
 
-    let cfg = match read_config(candidate) {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            app.wizard.error = Some(e);
-            return;
-        }
-    };
+    let (usable_vram, device) = usable_memory(app);
+    app.wizard.device = device;
 
+    match plan(candidate, &variant_label, app.hardware.backend, usable_vram) {
+        Ok(result) => app.wizard.result = Some(result),
+        Err(e) => app.wizard.error = Some(e),
+    }
+}
+
+/// The launchpad's `Enter`: solve and start the best configuration in one step.
+/// A model that doesn't fit is the one case that stops and explains itself.
+pub fn quick_launch(app: &mut App, model: &LocalModel) {
+    if !model.supported {
+        app.message = Some(Message::error(
+            model
+                .reason
+                .clone()
+                .unwrap_or_else(|| "this model isn't a Crane-supported architecture".to_string()),
+        ));
+        return;
+    }
+
+    load_local(app, &model.candidate);
+    if let Some(err) = app.wizard.error.clone() {
+        app.message = Some(Message::error(format!("could not evaluate this model: {err}")));
+        return;
+    }
+    if matches!(app.wizard.result, Some(SolveResult::Unusable { .. })) {
+        app.message = Some(Message::warn(
+            "this model doesn't fit usably on this hardware — press [c] to see why",
+        ));
+        return;
+    }
+    attempt_launch(app);
+}
+
+/// Solves for the best reachable context, given what this machine can spare.
+fn plan(
+    candidate: &LocalCandidate,
+    variant_label: &str,
+    backend: Backend,
+    usable_vram: u64,
+) -> Result<SolveResult, String> {
+    let cfg = read_config(candidate)?;
     let weight_bytes = match candidate.format {
         Format::Gguf => std::fs::metadata(&candidate.path)
             .map(|m| m.len())
@@ -99,34 +148,11 @@ pub fn load_local(app: &mut App, candidate: &LocalCandidate) {
         Format::Safetensors => safetensors_dir_bytes(&candidate.path).unwrap_or(0),
     };
     if weight_bytes == 0 {
-        app.wizard.error = Some("could not read this model's weight size on disk".to_string());
-        return;
+        return Err("could not read this model's weight size on disk".to_string());
     }
 
-    let (usable_vram, device) = app
-        .hardware
-        .gpus
-        .iter()
-        .enumerate()
-        .max_by_key(|(_, g)| g.vram_free)
-        .map_or((app.hardware.ram_available, 0), |(idx, g)| {
-            (g.vram_free, idx)
-        });
-    app.wizard.device = device;
-
-    // §7.3: apply the global measured÷predicted correction factor (once
-    // there's at least one local data point) by shrinking the effective
-    // budget the solver searches within — equivalent to scaling every
-    // prediction up by the same factor before comparing it to
-    // `usable_vram`, without touching the estimator's own math.
-    let db = MeasurementDb::load(&studio_core::paths::measurements_file());
-    let usable_vram = match db.correction_factor() {
-        Some(factor) if factor > 0.0 => (usable_vram as f64 / factor) as u64,
-        _ => usable_vram,
-    };
-
     let variants = vec![Variant {
-        label: variant_label,
+        label: variant_label.to_string(),
         weight_bytes,
         is_isq: false,
     }];
@@ -139,18 +165,42 @@ pub fn load_local(app: &mut App, candidate: &LocalCandidate) {
         supports_kv_swap: false,
         native_context: cfg.max_position_embeddings,
         usable_vram,
-        backend: app.hardware.backend,
+        backend,
         compute_dtype_bytes: 2.0,
         vision: false,
         max_concurrent: 1,
     };
-    app.wizard.result = Some(solve(&request, 262_144));
+    Ok(solve(&request, 262_144))
+}
+
+/// The memory the solver is allowed to plan inside, and which GPU it belongs
+/// to. §7.3: once there's at least one local measurement, the global
+/// measured÷predicted correction factor shrinks the budget — equivalent to
+/// scaling every prediction up by the same factor, without touching the
+/// estimator's own math.
+fn usable_memory(app: &App) -> (u64, usize) {
+    let (usable, device) = app
+        .hardware
+        .gpus
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, g)| g.vram_free)
+        .map_or((app.hardware.ram_available, 0), |(idx, g)| {
+            (g.vram_free, idx)
+        });
+
+    let db = MeasurementDb::load(&studio_core::paths::measurements_file());
+    let usable = match db.correction_factor() {
+        Some(factor) if factor > 0.0 => (usable as f64 / factor) as u64,
+        _ => usable,
+    };
+    (usable, device)
 }
 
 /// The §7.3 measurement-DB key for one solved config — must match exactly
-/// between the wizard's measured/predicted display and what gets sent
-/// along with the actual launch, or a launch's own outcome would never be
-/// found by the very config that produced it.
+/// between the wizard's measured/predicted display and what gets sent along
+/// with the actual launch, or a launch's own outcome would never be found by
+/// the very config that produced it.
 fn measurement_key_for(app: &App, config: &SolvedConfig) -> String {
     let backend_class = studio_core::measurement::backend_class(
         app.hardware.backend,
@@ -181,13 +231,10 @@ fn read_config(candidate: &LocalCandidate) -> Result<ModelConfig, String> {
 }
 
 pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
-    if app.wizard.launching {
-        return true;
-    }
     match key.code {
         KeyCode::Esc => {
-            app.screen = Screen::Browser;
-            app.status_line = None;
+            app.screen = Screen::Launchpad;
+            app.message = None;
             true
         }
         KeyCode::Down | KeyCode::Char('j') => {
@@ -221,11 +268,13 @@ fn attempt_launch(app: &mut App) {
         SolveResult::Unusable { .. } => None,
     };
     let Some(config) = chosen else {
-        app.status_line = Some("no viable configuration to launch on this hardware".to_string());
+        app.message = Some(Message::error(
+            "no viable configuration to launch on this hardware",
+        ));
         return;
     };
     let Some(candidate) = app.wizard.candidate.clone() else {
-        app.status_line = Some("no model selected".to_string());
+        app.message = Some(Message::error("no model selected"));
         return;
     };
 
@@ -252,14 +301,16 @@ fn attempt_launch(app: &mut App) {
         device: app.wizard.device,
     };
 
-    app.wizard.launching = true;
-    spawn_launch(
-        app,
-        spec,
-        app.wizard.variant_label.clone(),
-        measurement_key,
-        predicted_bytes,
-    );
+    // Straight to the ready screen with a "starting" state, rather than
+    // freezing whichever screen asked for the launch: loading weights onto a
+    // GPU takes tens of seconds, and that wait is exactly what that screen is
+    // for.
+    let label = app.wizard.variant_label.clone();
+    app.ready.begin(label.clone(), port, app.gateway_port);
+    app.ready.context = Some(config.context);
+    app.screen = Screen::Ready;
+    app.message = None;
+    spawn_launch(app, spec, label, measurement_key, predicted_bytes);
 }
 
 fn spawn_launch(
@@ -337,187 +388,324 @@ async fn do_launch(
 }
 
 pub fn render(app: &mut App, frame: &mut Frame) {
-    let [header, body, footer] = Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Min(3),
-        Constraint::Length(1),
-    ])
-    .areas(frame.area());
+    let chrome = Chrome::new(HINTS)
+        .crumb("Launch options")
+        .crumb(crate::ui::text::truncate(&app.wizard.variant_label, 28))
+        .status(crate::screens::hardware::status_spans(app))
+        .message(app.message.clone());
+    let body = ui::shell(frame, &app.theme, &chrome);
 
-    let title = app
-        .wizard
-        .candidate
-        .as_ref()
-        .map_or("Launch wizard".to_string(), |c| {
-            format!("Launch wizard — {}", c.path.display())
-        });
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(title, app.theme.header_style()))),
-        header,
-    );
-
-    if app.wizard.launching {
+    if let Some(err) = app.wizard.error.clone() {
+        let block = app.theme.block("Can't evaluate this model");
+        let inner = block.inner(body);
+        frame.render_widget(block, body);
         frame.render_widget(
-            Paragraph::new(format!("{} launching…", crate::theme::spinner(app.tick)))
-                .block(app.theme.block("")),
-            body,
+            Paragraph::new(
+                crate::ui::text::wrap(&err, inner.width)
+                    .into_iter()
+                    .map(|row| Line::from(Span::styled(row, Style::new().fg(app.theme.error))))
+                    .collect::<Vec<_>>(),
+            ),
+            inner,
         );
-    } else if let Some(err) = &app.wizard.error {
-        frame.render_widget(
-            Paragraph::new(format!("could not evaluate this model: {err}"))
-                .wrap(Wrap { trim: false })
-                .block(app.theme.block("")),
-            body,
-        );
-    } else if let Some(result) = app.wizard.result.clone() {
-        render_result(app, &result, frame, body);
-    } else {
-        frame.render_widget(
-            Paragraph::new("no model selected").block(app.theme.block("")),
-            body,
-        );
+        return;
     }
 
-    let launchable = !matches!(app.wizard.result, Some(SolveResult::Unusable { .. }));
-    let footer_text = if app.wizard.launching {
-        "please wait…".to_string()
-    } else if let Some(status) = &app.status_line {
-        // A failed launch attempt (§ `attempt_launch`'s early returns) has
-        // nowhere else to show up — this screen has no other status line,
-        // so silently doing nothing on Enter looked exactly like a hang.
-        status.clone()
-    } else if launchable {
-        "[\u{2191}\u{2193}] choose   [Enter] launch   [F2] theme   [Esc] back".to_string()
-    } else {
-        "[F2] theme   [Esc] back".to_string()
+    let Some(result) = app.wizard.result.clone() else {
+        let block = app.theme.block("");
+        frame.render_widget(
+            Paragraph::new("no model selected").block(block),
+            body,
+        );
+        return;
     };
-    frame.render_widget(
-        Paragraph::new(footer_text).style(app.theme.muted_style()),
-        footer,
-    );
-}
 
-fn render_result(app: &App, result: &SolveResult, frame: &mut Frame, area: ratatui::layout::Rect) {
-    let db = MeasurementDb::load(&studio_core::paths::measurements_file());
-    match result {
-        SolveResult::Reaches(configs) => {
-            let items: Vec<ListItem> = configs
-                .iter()
-                .enumerate()
-                .map(|(i, c)| {
-                    let style = if i == app.wizard.selected_config {
-                        app.theme.highlight_style()
-                    } else {
-                        Style::new()
-                    };
-                    ListItem::new(Line::from(vec![Span::styled(
-                        describe_config(app, &db, c),
-                        style,
-                    )]))
-                })
-                .collect();
-            frame.render_widget(
-                List::new(items).block(app.theme.block("Reaches 256k — pick a configuration")),
-                area,
-            );
-        }
+    match &result {
+        SolveResult::Reaches(configs) => render_reaches(app, configs, frame, body),
         SolveResult::Short {
             best,
             achieved_context,
             blockers,
-        } => {
-            let mut lines = vec![Line::from(Span::styled(
-                format!("Short of 256k — best reachable context is {achieved_context}"),
-                Style::new().fg(app.theme.warning),
-            ))];
-            lines.push(Line::from(describe_config(app, &db, best)));
-            lines.push(Line::raw(""));
-            lines.push(Line::from("What's using the VRAM:"));
-            for b in blockers {
-                lines.push(Line::from(format!(
-                    "  {} — {}",
-                    b.description,
-                    crate::fmt::bytes(b.bytes)
-                )));
-            }
-            lines.push(Line::raw(""));
-            lines.push(Line::from("[Enter] launch anyway at this context"));
-            frame.render_widget(
-                Paragraph::new(lines)
-                    .wrap(Wrap { trim: false })
-                    .block(app.theme.block("Short of target")),
-                area,
-            );
-        }
+        } => render_short(app, best, *achieved_context, blockers, frame, body),
         SolveResult::Unusable {
             achieved_context,
             suggestions,
-        } => {
-            let mut lines = vec![Line::from(Span::styled(
-                format!(
-                    "This model doesn't fit usably on this hardware (best: {achieved_context} context, below the {} floor).",
-                    studio_core::estimator::CONTEXT_FLOOR
-                ),
-                Style::new().fg(app.theme.error),
-            ))];
-            for s in suggestions {
-                lines.push(Line::from(describe_suggestion(s)));
-            }
-            frame.render_widget(
-                Paragraph::new(lines)
-                    .wrap(Wrap { trim: false })
-                    .block(app.theme.block("Unusable")),
-                area,
-            );
-        }
+        } => render_unusable(app, *achieved_context, suggestions, frame, body),
     }
 }
 
-/// §7.3: "on a subsequent launch with a matching key, the wizard shows the
-/// measured number instead of the prediction, labelled as measured" — and
-/// pre-warns if this exact configuration has OOM'd before.
-fn describe_config(app: &App, db: &MeasurementDb, c: &SolvedConfig) -> String {
-    let kv = c.kv_quant.map_or("kv fp16", kv_quant_label);
-    let key = measurement_key_for(app, c);
-    let size = db.latest_successful_for(&key).map_or_else(
-        || format!("predicted {}", crate::fmt::bytes(c.predicted.total())),
-        |m| format!("measured {}", crate::fmt::bytes(m.measured_peak_bytes)),
-    );
-    let warning = if db.prior_oom_for(&key).is_some() {
-        "  \u{26a0} OOM'd last time this was tried"
-    } else {
-        ""
+/// Lead with the recommendation as a card, and list the alternatives under it
+/// — the shape §4.4 asks for: an answer first, knobs second.
+fn render_reaches(app: &App, configs: &[SolvedConfig], frame: &mut Frame, area: Rect) {
+    let db = MeasurementDb::load(&studio_core::paths::measurements_file());
+    let selected = app.wizard.selected_config.min(configs.len().saturating_sub(1));
+    let Some(chosen) = configs.get(selected) else {
+        return;
     };
+
+    #[allow(clippy::cast_possible_truncation)]
+    let alternatives_height = (configs.len() as u16).saturating_add(2);
+    let [headline_area, alternatives_area, _] = Layout::vertical([
+        Constraint::Length(10),
+        Constraint::Length(alternatives_height),
+        Constraint::Min(0),
+    ])
+    .areas(area);
+
+    let block = app.theme.block_focused("Recommended", true);
+    let inner = block.inner(headline_area);
+    frame.render_widget(block, headline_area);
+    frame.render_widget(
+        Paragraph::new(config_card(app, &db, chosen, inner.width)),
+        inner,
+    );
+
+    let items: Vec<ListItem> = configs
+        .iter()
+        .enumerate()
+        .map(|(i, config)| {
+            let marker = if i == selected {
+                Span::styled(
+                    format!("{} ", glyph::BAR_HALF),
+                    Style::new().fg(app.theme.accent),
+                )
+            } else {
+                Span::raw("  ")
+            };
+            ListItem::new(Line::from(vec![
+                marker,
+                Span::styled(
+                    one_line_config(config),
+                    if i == selected {
+                        Style::new().fg(app.theme.accent)
+                    } else {
+                        Style::new().fg(app.theme.text)
+                    },
+                ),
+                Span::styled(
+                    format!("   {}", size_note(app, &db, config)),
+                    app.theme.muted_style(),
+                ),
+            ]))
+        })
+        .collect();
+    let block = app
+        .theme
+        .block(format!("Alternatives  ·  {}", configs.len()));
+    let inner = block.inner(alternatives_area);
+    frame.render_widget(block, alternatives_area);
+    frame.render_widget(List::new(items), inner);
+}
+
+fn render_short(
+    app: &App,
+    best: &SolvedConfig,
+    achieved_context: usize,
+    blockers: &[studio_core::estimator::Blocker],
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let db = MeasurementDb::load(&studio_core::paths::measurements_file());
+    let block = app
+        .theme
+        .block_focused("Short of the 256k target — still worth running", true);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(
+                format!("{} ", glyph::WARN),
+                Style::new().fg(app.theme.warning),
+            ),
+            Span::styled(
+                format!("best reachable context is {achieved_context}"),
+                Style::new()
+                    .fg(app.theme.warning)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::raw(""),
+    ];
+    lines.extend(config_card(app, &db, best, inner.width));
+    lines.push(Line::raw(""));
+    lines.push(ui::section(&app.theme, "what's using the memory"));
+    let total: u64 = blockers.iter().map(|b| b.bytes).sum();
+    for blocker in blockers {
+        let mut spans = vec![Span::styled(
+            format!("{:<18}", crate::ui::text::truncate(&blocker.description, 17)),
+            app.theme.muted_style(),
+        )];
+        spans.extend(bars::progress_bar(
+            &app.theme,
+            18,
+            ratio(blocker.bytes, total),
+            app.theme.accent_alt,
+        ));
+        spans.push(Span::styled(
+            format!("  {}", crate::fmt::bytes(blocker.bytes)),
+            Style::new().fg(app.theme.text),
+        ));
+        lines.push(Line::from(spans));
+    }
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn render_unusable(
+    app: &App,
+    achieved_context: usize,
+    suggestions: &[Suggestion],
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let block = app.theme.block("Doesn't fit on this hardware");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let mut lines = Vec::new();
+    for row in crate::ui::text::wrap(
+        &format!(
+            "The best this machine can do for this model is {achieved_context} tokens of context, below the {} floor a usable session needs.",
+            studio_core::estimator::CONTEXT_FLOOR
+        ),
+        inner.width,
+    ) {
+        lines.push(Line::from(Span::styled(
+            row,
+            Style::new().fg(app.theme.error),
+        )));
+    }
+    lines.push(Line::raw(""));
+    lines.push(ui::section(&app.theme, "what would help"));
+    for suggestion in suggestions {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{} ", glyph::ARROW),
+                Style::new().fg(app.theme.accent),
+            ),
+            Span::styled(describe_suggestion(suggestion), Style::new().fg(app.theme.text)),
+        ]));
+    }
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// The recommendation card: what will run, how much memory it's expected to
+/// take, and — the §4.4 rule — whether that number is predicted or measured.
+fn config_card(
+    app: &App,
+    db: &MeasurementDb,
+    config: &SolvedConfig,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let key = measurement_key_for(app, config);
+    let measured = db.latest_successful_for(&key);
+    let bytes = measured.map_or_else(|| config.predicted.total(), |m| m.measured_peak_bytes);
+    let (usable, _) = usable_memory(app);
+    let fill = ratio(bytes, usable.max(1));
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(
+                format!("{} ", glyph::DONE),
+                Style::new().fg(app.theme.success),
+            ),
+            Span::styled(
+                crate::ui::text::truncate(&config.variant_label, 46),
+                Style::new()
+                    .fg(app.theme.text)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::raw(""),
+        ui::field(&app.theme, "context", config.context.to_string()),
+        ui::field(
+            &app.theme,
+            "kv cache",
+            config.kv_quant.map_or("fp16", kv_quant_label),
+        ),
+        ui::field(
+            &app.theme,
+            "sequences",
+            format!("{} concurrent", config.concurrency),
+        ),
+        Line::raw(""),
+    ];
+
+    let bar_width = width.saturating_sub(34).clamp(10, 30);
+    let mut spans = vec![Span::styled(
+        format!(
+            "{:<13}  ",
+            if measured.is_some() {
+                "measured"
+            } else {
+                "predicted"
+            }
+        ),
+        app.theme.muted_style(),
+    )];
+    spans.extend(bars::load_bar(&app.theme, bar_width, fill));
+    spans.push(Span::styled(
+        format!(
+            "  {} of {}",
+            crate::fmt::bytes(bytes),
+            crate::fmt::bytes(usable)
+        ),
+        Style::new().fg(app.theme.text),
+    ));
+    lines.push(Line::from(spans));
+
+    if db.prior_oom_for(&key).is_some() {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{} ", glyph::WARN),
+                Style::new().fg(app.theme.warning),
+            ),
+            Span::styled(
+                "this exact configuration ran out of memory last time it was tried",
+                Style::new().fg(app.theme.warning),
+            ),
+        ]));
+    }
+    lines
+}
+
+fn one_line_config(config: &SolvedConfig) -> String {
     format!(
-        "{} — context {} — {kv} — {} concurrent — {size}{warning}",
-        c.variant_label, c.context, c.concurrency
+        "context {:<7}  kv {:<5}  {} concurrent",
+        config.context,
+        config.kv_quant.map_or("fp16", kv_quant_label),
+        config.concurrency
     )
 }
 
-fn kv_quant_label(q: KvQuant) -> &'static str {
-    match q {
-        KvQuant::Int8 => "kv int8",
-        KvQuant::Int4 => "kv int4",
+fn size_note(app: &App, db: &MeasurementDb, config: &SolvedConfig) -> String {
+    let key = measurement_key_for(app, config);
+    db.latest_successful_for(&key).map_or_else(
+        || format!("predicted {}", crate::fmt::bytes(config.predicted.total())),
+        |m| format!("measured {}", crate::fmt::bytes(m.measured_peak_bytes)),
+    )
+}
+
+fn kv_quant_label(quant: KvQuant) -> &'static str {
+    match quant {
+        KvQuant::Int8 => "int8",
+        KvQuant::Int4 => "int4",
     }
 }
 
-fn describe_suggestion(s: &Suggestion) -> String {
-    match s {
+fn describe_suggestion(suggestion: &Suggestion) -> String {
+    match suggestion {
         Suggestion::SmallerVariant {
             label,
             achievable_context,
-        } => {
-            format!(
-                "  try a smaller/more-quantized variant like {label} — achievable context: {achievable_context}"
-            )
-        }
+        } => format!(
+            "try a smaller or more heavily quantized variant like {label} — that reaches {achievable_context}"
+        ),
         Suggestion::NeedMoreVram {
             additional_bytes_for_floor,
-        } => {
-            format!(
-                "  needs about {} more VRAM to reach the usable floor",
-                crate::fmt::bytes(*additional_bytes_for_floor)
-            )
-        }
+        } => format!(
+            "about {} more free VRAM would reach the usable floor",
+            crate::fmt::bytes(*additional_bytes_for_floor)
+        ),
     }
 }

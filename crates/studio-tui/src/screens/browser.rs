@@ -1,27 +1,59 @@
-//! The model browser (§4.3): curated catalog, a local-filesystem scan
-//! (§8.3 needs a UI home somewhere; this is it), and `HuggingFace` search
-//! (§8.2). Enter on a supported entry does the fastest thing that gets to
-//! a running server: a Local candidate goes straight to the wizard (no
-//! download needed); a Catalog or Search entry starts a real download
-//! (`screens::download`) and lands in the wizard once it finishes.
+//! Where models come from (§4.3): the curated catalog, a scan of the local
+//! filesystem (§8.3), and filtered `HuggingFace` search (§8.2). `Enter` always
+//! does the fastest thing that ends with a running server — a local file goes
+//! straight to the launch options, a catalog or search entry starts a real
+//! download and lands on the launchpad with the model ready to run.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{List, ListItem, Paragraph, Tabs};
+use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use studio_core::catalog::hf::HfCandidate;
 use studio_core::catalog::local::LocalCandidate;
 use studio_core::catalog::{Catalog, Classification, Source};
 
 use crate::app::App;
+use crate::theme::{Theme, glyph};
+use crate::ui::{self, Chrome, Message};
+
+const HINTS: &[(&str, &str)] = &[
+    ("tab", "catalog / local / search"),
+    ("↑↓", "select"),
+    ("⏎", "get it"),
+    ("/", "search"),
+    ("esc", "back"),
+];
+const SEARCH_HINTS: &[(&str, &str)] = &[("⏎", "search"), ("esc", "cancel")];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Catalog,
     Local,
     Search,
+}
+
+impl Tab {
+    fn label(self) -> &'static str {
+        match self {
+            Tab::Catalog => "Catalog",
+            Tab::Local => "On disk",
+            Tab::Search => "HuggingFace",
+        }
+    }
+
+    fn next(self) -> Self {
+        match self {
+            Tab::Catalog => Tab::Local,
+            Tab::Local => Tab::Search,
+            Tab::Search => Tab::Catalog,
+        }
+    }
+
+    fn previous(self) -> Self {
+        self.next().next()
+    }
 }
 
 pub struct State {
@@ -34,6 +66,7 @@ pub struct State {
     pub editing_query: bool,
     pub searching: bool,
     pub selected: usize,
+    list: ListState,
 }
 
 impl Default for State {
@@ -48,6 +81,7 @@ impl Default for State {
             editing_query: false,
             searching: false,
             selected: 0,
+            list: ListState::default(),
         }
     }
 }
@@ -84,17 +118,19 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
 
     match key.code {
         KeyCode::Esc => {
-            app.screen = crate::app::Screen::Home;
+            app.screen = crate::app::Screen::Launchpad;
             true
         }
-        KeyCode::Tab => {
-            app.browser.tab = match app.browser.tab {
-                Tab::Catalog => Tab::Local,
-                Tab::Local => Tab::Search,
-                Tab::Search => Tab::Catalog,
-            };
+        KeyCode::Tab | KeyCode::Right => {
+            app.browser.tab = app.browser.tab.next();
             app.browser.selected = 0;
-            app.status_line = None;
+            app.message = None;
+            true
+        }
+        KeyCode::BackTab | KeyCode::Left => {
+            app.browser.tab = app.browser.tab.previous();
+            app.browser.selected = 0;
+            app.message = None;
             true
         }
         KeyCode::Down | KeyCode::Char('j') => {
@@ -108,7 +144,8 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
             app.browser.selected = app.browser.selected.saturating_sub(1);
             true
         }
-        KeyCode::Char('/') if app.browser.tab == Tab::Search => {
+        KeyCode::Char('/') => {
+            app.browser.tab = Tab::Search;
             app.browser.editing_query = true;
             true
         }
@@ -126,16 +163,17 @@ fn handle_query_input(app: &mut App, key: KeyEvent) -> bool {
         KeyCode::Enter => {
             app.browser.editing_query = false;
             if !app.browser.search_query.trim().is_empty() {
+                app.browser.searching = true;
                 spawn_search(app);
             }
         }
         KeyCode::Backspace => {
             app.browser.search_query.pop();
         }
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return false,
         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.browser.search_query.push(c);
         }
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return false,
         _ => {}
     }
     true
@@ -158,7 +196,7 @@ fn spawn_search(app: &App) {
 }
 
 fn select_current(app: &mut App) {
-    app.status_line = None;
+    app.message = None;
     match app.browser.tab {
         Tab::Local => {
             if let Some(candidate) = app.browser.local.get(app.browser.selected).cloned() {
@@ -166,8 +204,9 @@ fn select_current(app: &mut App) {
                     crate::screens::wizard::load_local(app, &candidate);
                     app.screen = crate::app::Screen::Wizard;
                 } else {
-                    app.status_line =
-                        Some("that file isn't a Crane-supported architecture".to_string());
+                    app.message = Some(Message::error(
+                        "that file isn't a Crane-supported architecture",
+                    ));
                 }
             }
         }
@@ -181,15 +220,16 @@ fn select_current(app: &mut App) {
                 return;
             };
             if !matches!(candidate.classification, Classification::Supported { .. }) {
-                app.status_line =
-                    Some("that repo isn't a Crane-supported architecture".to_string());
+                app.message = Some(Message::error(
+                    "that repo isn't a Crane-supported architecture",
+                ));
             } else if let Some(gguf_file) = candidate.gguf_files.first() {
                 crate::screens::download::start_hf(app, &candidate.repo_id, gguf_file);
             } else {
-                app.status_line = Some(format!(
-                    "{}: no .gguf file found in this repo to download",
+                app.message = Some(Message::error(format!(
+                    "{}: no .gguf file in this repo to download",
                     candidate.repo_id
-                ));
+                )));
             }
         }
         Tab::Catalog => {
@@ -205,186 +245,306 @@ fn select_current(app: &mut App) {
 }
 
 pub fn render(app: &mut App, frame: &mut Frame) {
-    let [tabs_area, body, footer] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Min(3),
-        Constraint::Length(1),
-    ])
-    .areas(frame.area());
-
-    let titles = ["Catalog", "Local", "Search"];
-    let selected_tab = match app.browser.tab {
-        Tab::Catalog => 0,
-        Tab::Local => 1,
-        Tab::Search => 2,
+    let hints = if app.browser.editing_query {
+        SEARCH_HINTS
+    } else {
+        HINTS
     };
-    frame.render_widget(
-        Tabs::new(titles).select(selected_tab).highlight_style(
-            Style::new()
-                .fg(app.theme.accent)
-                .add_modifier(Modifier::BOLD),
-        ),
-        tabs_area,
-    );
+    let chrome = Chrome::new(hints)
+        .crumb("Get models")
+        .status(crate::screens::hardware::status_spans(app))
+        .message(app.message.clone());
+    let body = ui::shell(frame, &app.theme, &chrome);
+
+    let [tabs_area, list_area] =
+        Layout::vertical([Constraint::Length(2), Constraint::Min(4)]).areas(body);
+    frame.render_widget(Paragraph::new(tabs_line(app)), tabs_area);
 
     match app.browser.tab {
-        Tab::Catalog => render_catalog(app, frame, body),
-        Tab::Local => render_local(app, frame, body),
-        Tab::Search => render_search(app, frame, body),
+        Tab::Catalog => render_catalog(app, frame, list_area),
+        Tab::Local => render_local(app, frame, list_area),
+        Tab::Search => render_search(app, frame, list_area),
     }
-
-    let footer_text = if app.browser.editing_query {
-        format!(
-            "search: {}_   [Enter] run   [Esc] cancel",
-            app.browser.search_query
-        )
-    } else if let Some(status) = &app.status_line {
-        status.clone()
-    } else {
-        "[Tab] switch tab   [\u{2191}\u{2193}] move   [Enter] select   [/] search   [F2] theme   [Esc] back"
-            .to_string()
-    };
-    frame.render_widget(
-        Paragraph::new(footer_text).style(app.theme.muted_style()),
-        footer,
-    );
 }
 
-fn render_catalog(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
-    let Some(catalog) = &app.browser.catalog else {
-        frame.render_widget(
-            Paragraph::new(format!(
-                "{} loading catalog…",
-                crate::theme::spinner(app.tick)
-            ))
-            .block(app.theme.block("")),
-            area,
-        );
+/// Tabs as pills rather than ratatui's underlined `Tabs` — the selected one
+/// needs to be obvious at a glance next to a dense list.
+fn tabs_line(app: &App) -> Line<'static> {
+    let mut spans = Vec::new();
+    for tab in [Tab::Catalog, Tab::Local, Tab::Search] {
+        let selected = tab == app.browser.tab;
+        spans.push(Span::styled(
+            format!(" {} ", tab.label()),
+            if selected {
+                Style::new()
+                    .fg(app.theme.highlight_fg)
+                    .bg(app.theme.highlight_bg)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                app.theme.muted_style()
+            },
+        ));
+        spans.push(Span::raw(" "));
+    }
+    Line::from(spans)
+}
+
+fn render_catalog(app: &mut App, frame: &mut Frame, area: Rect) {
+    let Some(catalog) = app.browser.catalog.clone() else {
+        waiting(app, frame, area, "fetching the curated catalog");
         return;
     };
+
+    let source = match app.browser.catalog_source {
+        Some(Source::Remote) => "live",
+        Some(Source::Cached) => "cached",
+        Some(Source::Bundled) => "bundled",
+        None => "",
+    };
+    let block = app
+        .theme
+        .block_focused(format!("Catalog  ·  {} models", catalog.models.len()), true);
+    let inner = block.inner(area);
+    frame.render_widget(
+        block.title_bottom(
+            Line::from(Span::styled(format!(" {source} "), app.theme.muted_style()))
+                .right_aligned(),
+        ),
+        area,
+    );
+
     let items: Vec<ListItem> = catalog
         .models
         .iter()
         .enumerate()
         .map(|(i, model)| {
-            let variants = model.variants.len();
-            styled_item(
+            let smallest = model
+                .variants
+                .iter()
+                .map(|v| v.download_bytes)
+                .min()
+                .unwrap_or(0);
+            row(
                 &app.theme,
                 i == app.browser.selected,
-                Span::raw(format!(
-                    "{} — {} ({variants} variant(s))",
-                    model.id, model.display_name
-                )),
-            )
-        })
-        .collect();
-    let title = format!("Catalog ({} models)", catalog.models.len());
-    frame.render_widget(List::new(items).block(app.theme.block(title)), area);
-}
-
-fn render_local(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
-    if app.browser.local.is_empty() {
-        frame.render_widget(
-            Paragraph::new(format!(
-                "{} no local models found (scanning…)",
-                crate::theme::spinner(app.tick)
-            ))
-            .block(app.theme.block("")),
-            area,
-        );
-        return;
-    }
-    let items: Vec<ListItem> = app
-        .browser
-        .local
-        .iter()
-        .enumerate()
-        .map(|(i, candidate)| {
-            let (glyph, color, note) = classification_note(&app.theme, &candidate.classification);
-            styled_item(
-                &app.theme,
-                i == app.browser.selected,
-                Span::styled(
-                    format!("{glyph} {}{note}", candidate.path.display()),
-                    Style::new().fg(color),
+                inner.width,
+                Span::styled(glyph::IDLE.to_string(), app.theme.muted_style()),
+                &model.display_name,
+                vec![Span::styled(
+                    format!("from {}", crate::fmt::bytes(smallest)),
+                    Style::new().fg(app.theme.text),
+                )],
+                &format!(
+                    "{}  ·  {} variant(s)  ·  {}",
+                    model.model_type,
+                    model.variants.len(),
+                    model.id
                 ),
             )
         })
         .collect();
-    frame.render_widget(
-        List::new(items).block(app.theme.block("Local models")),
-        area,
-    );
+    render_list(app, frame, inner, items);
 }
 
-fn render_search(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
-    if app.browser.searching {
+fn render_local(app: &mut App, frame: &mut Frame, area: Rect) {
+    if app.browser.local.is_empty() {
+        waiting(app, frame, area, "scanning the models directory");
+        return;
+    }
+    let block = app.theme.block_focused(
+        format!("On disk  ·  {} files", app.browser.local.len()),
+        true,
+    );
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let local = app.browser.local.clone();
+    let items: Vec<ListItem> = local
+        .iter()
+        .enumerate()
+        .map(|(i, candidate)| {
+            let (mark, color, note) = classification_note(&app.theme, &candidate.classification);
+            let name = candidate.path.file_name().map_or_else(
+                || candidate.path.display().to_string(),
+                |n| n.to_string_lossy().to_string(),
+            );
+            row(
+                &app.theme,
+                i == app.browser.selected,
+                inner.width,
+                Span::styled(mark.to_string(), Style::new().fg(color)),
+                &name,
+                Vec::new(),
+                &format!(
+                    "{}  ·  {}",
+                    note.trim_start_matches(' '),
+                    crate::ui::text::truncate_start(
+                        &candidate.path.display().to_string(),
+                        (inner.width as usize).saturating_sub(24)
+                    )
+                ),
+            )
+        })
+        .collect();
+    render_list(app, frame, inner, items);
+}
+
+fn render_search(app: &mut App, frame: &mut Frame, area: Rect) {
+    let title = if app.browser.search_query.is_empty() {
+        "HuggingFace".to_string()
+    } else {
+        format!("HuggingFace  ·  “{}”", app.browser.search_query)
+    };
+    let block = app.theme.block_focused(title, true);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if app.browser.editing_query {
+        #[allow(clippy::cast_possible_truncation)]
+        let cursor_x = inner.x + 2 + app.browser.search_query.chars().count() as u16;
         frame.render_widget(
-            Paragraph::new(format!("{} searching…", crate::theme::spinner(app.tick)))
-                .block(app.theme.block("")),
-            area,
+            Paragraph::new(Line::from(vec![
+                Span::styled(
+                    format!("{} ", glyph::ARROW),
+                    Style::new().fg(app.theme.accent),
+                ),
+                Span::styled(
+                    app.browser.search_query.clone(),
+                    Style::new().fg(app.theme.text),
+                ),
+            ])),
+            inner,
         );
+        frame.set_cursor_position((cursor_x.min(inner.right().saturating_sub(1)), inner.y));
+        return;
+    }
+
+    if app.browser.searching {
+        frame.render_widget(spinner_line(app, "searching HuggingFace"), inner);
         return;
     }
     if app.browser.search_results.is_empty() {
         frame.render_widget(
-            Paragraph::new("press [/] to search HuggingFace").block(app.theme.block("")),
-            area,
+            Paragraph::new(vec![
+                Line::from(Span::styled(
+                    "press / to search HuggingFace",
+                    Style::new().fg(app.theme.text),
+                )),
+                Line::from(Span::styled(
+                    "results are filtered to architectures Crane can actually run",
+                    app.theme.muted_style(),
+                )),
+            ]),
+            inner,
         );
         return;
     }
-    let items: Vec<ListItem> = app
-        .browser
-        .search_results
+
+    let results = app.browser.search_results.clone();
+    let items: Vec<ListItem> = results
         .iter()
         .enumerate()
         .map(|(i, candidate)| {
-            let (glyph, color, note) = classification_note(&app.theme, &candidate.classification);
-            let gated = if candidate.gated { " [gated]" } else { "" };
-            styled_item(
+            let (mark, color, note) = classification_note(&app.theme, &candidate.classification);
+            let right = if candidate.gated {
+                vec![ui::badge(&app.theme, "gated", app.theme.warning)]
+            } else {
+                Vec::new()
+            };
+            row(
                 &app.theme,
                 i == app.browser.selected,
-                Span::styled(
-                    format!("{glyph} {}{gated}{note}", candidate.repo_id),
-                    Style::new().fg(color),
-                ),
+                inner.width,
+                Span::styled(mark.to_string(), Style::new().fg(color)),
+                &candidate.repo_id,
+                right,
+                note.trim_start_matches(' '),
             )
         })
         .collect();
-    frame.render_widget(
-        List::new(items).block(app.theme.block("HuggingFace search")),
+    render_list(app, frame, inner, items);
+}
+
+fn render_list(app: &mut App, frame: &mut Frame, area: Rect, items: Vec<ListItem<'static>>) {
+    app.browser.list.select(Some(app.browser.selected));
+    frame.render_stateful_widget(
+        List::new(items).highlight_style(Style::new().bg(app.theme.surface)),
         area,
+        &mut app.browser.list,
     );
 }
 
+/// Every list in this screen uses the same two-line row as the launchpad, so
+/// moving between them doesn't feel like moving between two different apps.
+fn row(
+    theme: &Theme,
+    selected: bool,
+    width: u16,
+    mark: Span<'static>,
+    name: &str,
+    right: Vec<Span<'static>>,
+    detail: &str,
+) -> ListItem<'static> {
+    let marker = if selected {
+        Span::styled(
+            format!("{} ", glyph::BAR_HALF),
+            Style::new().fg(theme.accent),
+        )
+    } else {
+        Span::raw("  ")
+    };
+    let name_style = if selected {
+        Style::new().fg(theme.accent).add_modifier(Modifier::BOLD)
+    } else {
+        Style::new().fg(theme.text).add_modifier(Modifier::BOLD)
+    };
+    ListItem::new(vec![
+        ui::split_row(
+            width,
+            vec![
+                marker,
+                mark,
+                Span::raw(" "),
+                Span::styled(crate::ui::text::truncate(name, 52), name_style),
+            ],
+            right,
+        ),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled(
+                crate::ui::text::truncate(detail, (width as usize).saturating_sub(4)),
+                theme.muted_style(),
+            ),
+        ]),
+    ])
+}
+
+fn waiting(app: &App, frame: &mut Frame, area: Rect, what: &str) {
+    let block = app.theme.block("");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    frame.render_widget(spinner_line(app, what), inner);
+}
+
+fn spinner_line(app: &App, what: &str) -> Paragraph<'static> {
+    Paragraph::new(Line::from(vec![
+        Span::styled(
+            format!("{} ", crate::theme::spinner(app.tick)),
+            Style::new().fg(app.theme.accent),
+        ),
+        Span::styled(format!("{what}…"), app.theme.muted_style()),
+    ]))
+}
+
 fn classification_note(
-    theme: &crate::theme::Theme,
+    theme: &Theme,
     classification: &Classification,
 ) -> (&'static str, ratatui::style::Color, String) {
     match classification {
         Classification::Supported { model_type, .. } => {
-            ("\u{25cf}", theme.success, format!(" — {model_type}"))
+            (glyph::IDLE, theme.success, (*model_type).to_string())
         }
-        Classification::Unsupported { reason, .. } => {
-            ("\u{2715}", theme.error, format!(" — {reason}"))
-        }
-        Classification::Unknown { reason } => ("?", theme.muted, format!(" — {reason}")),
+        Classification::Unsupported { reason, .. } => (glyph::FAILED, theme.error, reason.clone()),
+        Classification::Unknown { reason } => (glyph::UNKNOWN, theme.muted, reason.clone()),
     }
-}
-
-/// Selection highlight always wins over any semantic (success/error/muted)
-/// color a row's own `Span` might already carry — otherwise the selected
-/// row would keep e.g. its red "unsupported" foreground on top of the
-/// highlight background, which reads as broken rather than selected.
-fn styled_item(
-    theme: &crate::theme::Theme,
-    selected: bool,
-    span: Span<'static>,
-) -> ListItem<'static> {
-    let style = if selected {
-        theme.highlight_style()
-    } else {
-        span.style
-    };
-    ListItem::new(Line::from(vec![Span::styled(span.content, style)]))
 }

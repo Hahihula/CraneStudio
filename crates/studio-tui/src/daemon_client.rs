@@ -256,6 +256,21 @@ impl DaemonClient {
     pub fn gateway_port(&self) -> u16 {
         self.gateway_port
     }
+
+    /// A client that talks to nothing, for rendering tests — every screen takes
+    /// the whole `App`, so previewing one needs an `App`, and an `App` needs a
+    /// `DaemonClient` even when no daemon is involved.
+    #[cfg(test)]
+    pub(crate) fn offline(control_port: u16, gateway_port: u16) -> Self {
+        DaemonClient {
+            http: reqwest::Client::new(),
+            control_base: format!("http://127.0.0.1:{control_port}"),
+            gateway_base: format!("http://127.0.0.1:{gateway_port}"),
+            control_port,
+            gateway_port,
+            attach_socket: None,
+        }
+    }
 }
 
 fn spawn_daemon(control_port: u16, gateway_port: u16) -> anyhow::Result<()> {

@@ -5,12 +5,14 @@
 mod cpu;
 pub(crate) mod disk;
 mod gpu;
+mod live;
 
 use std::path::Path;
 
 pub use cpu::CpuInfo;
 pub use disk::DiskInfo;
 pub use gpu::GpuInfo;
+pub use live::{Sample, Sampler};
 use sysinfo::System;
 
 /// What *this binary* was built with — see PLAN.md §13. Backend-conditional
