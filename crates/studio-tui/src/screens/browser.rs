@@ -334,16 +334,53 @@ fn render_catalog(app: &mut App, frame: &mut Frame, area: Rect) {
                     format!("from {}", crate::fmt::bytes(smallest)),
                     Style::new().fg(app.theme.text),
                 )],
-                &format!(
-                    "{}  ·  {} variant(s)  ·  {}",
-                    model.model_type,
-                    model.variants.len(),
-                    model.id
-                ),
+                &catalog_detail(model),
             )
         })
         .collect();
     render_list(app, frame, inner, items);
+}
+
+/// What a catalog row says about a model underneath its name. The catalog
+/// carries far more than a row can hold, so this is the subset that actually
+/// decides "is this the one I want": the family Crane will load it as, how much
+/// context it can reach, what it can do, and how many ways it ships.
+fn catalog_detail(model: &studio_core::catalog::schema::ModelEntry) -> String {
+    use studio_core::catalog::schema::Capability;
+
+    let mut parts = vec![model.model_type.clone(), context_label(model.native_context)];
+
+    let mut abilities = Vec::new();
+    if model.capabilities.contains(&Capability::Tools) {
+        abilities.push("tools");
+    }
+    if model.capabilities.contains(&Capability::Vision) {
+        abilities.push("vision");
+    }
+    if !abilities.is_empty() {
+        parts.push(abilities.join(" + "));
+    }
+
+    // "quants" only reads right for GGUF; unquantized safetensors variants are
+    // just variants.
+    let quantized = model.variants.iter().all(|v| v.quant.is_some());
+    parts.push(match (model.variants.len(), quantized) {
+        (1, _) => "1 variant".to_string(),
+        (n, true) => format!("{n} quants"),
+        (n, false) => format!("{n} variants"),
+    });
+    parts.push(model.license.clone());
+    parts.join("  ·  ")
+}
+
+/// `262144` → `256k ctx`, so a row can carry the number that decides whether a
+/// model is worth downloading without spending 6 columns on digits.
+fn context_label(context: usize) -> String {
+    if context >= 1024 && context % 1024 == 0 {
+        format!("{}k ctx", context / 1024)
+    } else {
+        format!("{context} ctx")
+    }
 }
 
 fn render_local(app: &mut App, frame: &mut Frame, area: Rect) {

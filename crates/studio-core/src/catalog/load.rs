@@ -77,12 +77,217 @@ async fn fetch_remote(url: &str) -> Option<Catalog> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
+    use crate::catalog::FAMILIES;
+    use crate::catalog::schema::{Capability, Format};
+    use crate::estimator::CONTEXT_FLOOR;
 
     #[test]
     fn bundled_catalog_parses_and_is_non_empty() {
         let catalog = bundled();
         assert!(!catalog.models.is_empty());
+    }
+
+    /// §8.1's promise is that "nothing it offers can fail to load", and the
+    /// first way to break that is naming a `--model-type` Crane has never
+    /// heard of. Everything below this test guards one such promise, so that
+    /// adding a model stays a data-only change that can't quietly ship a
+    /// broken entry.
+    #[test]
+    fn every_entry_names_a_family_crane_supports() {
+        for model in bundled().models {
+            assert!(
+                FAMILIES.iter().any(|f| f.model_type == model.model_type),
+                "{}: model_type {:?} is not a family Crane supports",
+                model.id,
+                model.model_type
+            );
+        }
+    }
+
+    #[test]
+    fn ids_are_unique_across_models_and_variants() {
+        let catalog = bundled();
+        let mut model_ids = HashSet::new();
+        let mut variant_ids = HashSet::new();
+        for model in &catalog.models {
+            assert!(model_ids.insert(&model.id), "duplicate model id {}", model.id);
+            for variant in &model.variants {
+                assert!(
+                    variant_ids.insert(&variant.id),
+                    "duplicate variant id {}",
+                    variant.id
+                );
+            }
+        }
+    }
+
+    /// Crane's `create_backend` rejects `--quant` outright for every model type
+    /// except `qwen3_5`, and KV-cache compression is that same family's
+    /// feature (§2.8) — an entry claiming either elsewhere would offer the
+    /// wizard a knob that makes the launch fail.
+    #[test]
+    fn only_the_hybrid_qwen_family_claims_isq_or_kv_quant() {
+        for model in bundled().models {
+            if model.model_type == "qwen3_5" {
+                continue;
+            }
+            assert!(
+                !model.supports.isq,
+                "{}: only qwen3_5 accepts --quant",
+                model.id
+            );
+            assert!(
+                !model.supports.kv_quant,
+                "{}: KV-cache compression is qwen3_5-only (§2.8)",
+                model.id
+            );
+        }
+    }
+
+    /// §2.11b: no family v1 targets supports KV swap, which is what pins
+    /// concurrency to 1 and makes 256k reachable at all.
+    #[test]
+    fn no_entry_claims_kv_swap() {
+        for model in bundled().models {
+            assert!(!model.supports.kv_swap, "{}: kv_swap must be false", model.id);
+        }
+    }
+
+    #[test]
+    fn vision_is_declared_consistently_with_the_family() {
+        for model in bundled().models {
+            let family = FAMILIES
+                .iter()
+                .find(|f| f.model_type == model.model_type)
+                .expect("checked by every_entry_names_a_family_crane_supports");
+            assert_eq!(
+                model.supports.vision, family.vision,
+                "{}: supports.vision disagrees with the {} family",
+                model.id, family.model_type
+            );
+            assert_eq!(
+                model.capabilities.contains(&Capability::Vision),
+                model.supports.vision,
+                "{}: the Vision capability and supports.vision must agree",
+                model.id
+            );
+        }
+    }
+
+    /// A variant below the 32k floor could never serve a usable session
+    /// (§7.0, §10.3), so it doesn't belong in a curated list.
+    #[test]
+    fn every_entry_reaches_the_context_floor() {
+        for model in bundled().models {
+            assert!(
+                model.native_context >= CONTEXT_FLOOR,
+                "{}: native context {} is below the {CONTEXT_FLOOR} floor",
+                model.id,
+                model.native_context
+            );
+        }
+    }
+
+    /// §5: pin to a commit sha, never a floating branch — a saved profile (or
+    /// a catalog entry) must not silently change meaning later.
+    #[test]
+    fn every_variant_pins_a_commit_sha() {
+        for model in bundled().models {
+            for variant in &model.variants {
+                assert!(
+                    variant.revision.len() == 40
+                        && variant.revision.chars().all(|c| c.is_ascii_hexdigit()),
+                    "{}: revision {:?} is not a commit sha",
+                    variant.id,
+                    variant.revision
+                );
+                assert!(
+                    variant.download_bytes > 0,
+                    "{}: download_bytes must be the real size",
+                    variant.id
+                );
+            }
+        }
+    }
+
+    /// The launcher builds a model path from a variant's own file list — one
+    /// `.gguf` file for GGUF, or a directory Crane's `from_pretrained` can
+    /// read for safetensors (config + tokenizer + weights). Getting this
+    /// wrong surfaces as a failed launch *after* a multi-gigabyte download.
+    #[test]
+    fn every_variant_lists_the_files_its_format_needs() {
+        for model in bundled().models {
+            for variant in &model.variants {
+                match variant.format {
+                    Format::Gguf => {
+                        let ggufs: Vec<_> = variant
+                            .files
+                            .iter()
+                            .filter(|f| f.ends_with(".gguf"))
+                            .collect();
+                        assert_eq!(
+                            ggufs.len(),
+                            1,
+                            "{}: a GGUF variant names exactly one .gguf file, got {:?}",
+                            variant.id,
+                            variant.files
+                        );
+                        assert!(
+                            variant.quant.is_some(),
+                            "{}: a GGUF variant states its quantization",
+                            variant.id
+                        );
+                    }
+                    Format::Safetensors => {
+                        for required in ["config.json", "tokenizer.json"] {
+                            assert!(
+                                variant.files.iter().any(|f| f == required),
+                                "{}: safetensors variants must include {required}",
+                                variant.id
+                            );
+                        }
+                        assert!(
+                            variant.files.iter().any(|f| f.ends_with(".safetensors")),
+                            "{}: safetensors variants must include weights",
+                            variant.id
+                        );
+                        assert!(
+                            variant.quant.is_none(),
+                            "{}: safetensors weights are unquantized",
+                            variant.id
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Crane resolves the chat template from `tokenizer_config.json`, falling
+    /// back to a standalone `chat_template.jinja` — a safetensors entry that
+    /// downloads neither gets Crane's Hunyuan fallback template applied to a
+    /// model that isn't Hunyuan, which produces confidently wrong output
+    /// rather than an error.
+    #[test]
+    fn every_safetensors_variant_downloads_a_chat_template() {
+        for model in bundled().models {
+            for variant in &model.variants {
+                if variant.format != Format::Safetensors {
+                    continue;
+                }
+                assert!(
+                    variant
+                        .files
+                        .iter()
+                        .any(|f| f == "tokenizer_config.json" || f == "chat_template.jinja"),
+                    "{}: no chat template among {:?}",
+                    variant.id,
+                    variant.files
+                );
+            }
+        }
     }
 
     #[tokio::test]

@@ -4,9 +4,31 @@
 // present locally), started with `cranestudio __serve`, and exercised
 // against a real request. Adding a model is meant to be a pure data change
 // — no code — so keep new entries to this same standard before merging.
+//
+// Entries marked `PENDING LAUNCH CHECK` are the exception, and are marked so
+// they can be found with one grep. For those, everything that can be checked
+// without a GPU has been: the commit sha, the exact file names and their
+// byte-exact sizes come from the HuggingFace API at that sha, and the
+// architecture / context / dimensions come from the repo's own `config.json`
+// (or, for GGUF, from the family the file belongs to). What is *not* yet
+// verified is the one thing that needs the hardware: that crane-serve loads it
+// and answers a request. Clear the marker as each one is launched.
+//
+// Two Crane facts shape which format an entry can use (both read out of
+// `crane-serve/src/engine/model_factory.rs`, `create_backend`):
+//
+//   * `--quant` (ISQ) is rejected for every model type except `qwen3_5`, so
+//     `supports.isq` is false everywhere else — it isn't a conservative guess,
+//     it's a hard guard in Crane.
+//   * only `qwen3_5`, `minicpm5`, `gemma4` and `hunyuan` have GGUF loaders at
+//     all, and of those only `qwen3_5` and `minicpm5` read the tokenizer
+//     embedded in the GGUF. `qwen3`, `gemma4` and `hunyuan` demand a sibling
+//     `tokenizer.json` that the published GGUF repos don't ship, so those
+//     families are catalogued as safetensors instead of shipping an entry that
+//     cannot load.
 (
     schema_version: 1,
-    updated: "2026-08-17",
+    updated: "2026-08-28",
     models: [
         (
             id: "qwen3.5-0.8b",
@@ -25,6 +47,19 @@
                 vision: false,
             ),
             variants: [
+                (
+                    id: "qwen3.5-0.8b-q4_k_m",
+                    repo: "unsloth/Qwen3.5-0.8B-GGUF",
+                    revision: "6ab461498e2023f6e3c1baea90a8f0fe38ab64d0",
+                    files: ["Qwen3.5-0.8B-Q4_K_M.gguf"],
+                    format: Gguf,
+                    quant: Some("Q4_K_M"),
+                    download_bytes: 532517120,
+                    // PENDING LAUNCH CHECK — same repo and revision as the
+                    // Q8_0 variant below, which was smoke-tested; only the
+                    // quantization differs.
+                    measured: {},
+                ),
                 (
                     id: "qwen3.5-0.8b-q8_0",
                     repo: "unsloth/Qwen3.5-0.8B-GGUF",
@@ -59,6 +94,18 @@
             ),
             variants: [
                 (
+                    id: "qwen3.5-4b-q4_k_m",
+                    repo: "unsloth/Qwen3.5-4B-GGUF",
+                    revision: "e87f176479d0855a907a41277aca2f8ee7a09523",
+                    files: ["Qwen3.5-4B-Q4_K_M.gguf"],
+                    format: Gguf,
+                    quant: Some("Q4_K_M"),
+                    download_bytes: 2740937888,
+                    // PENDING LAUNCH CHECK — same repo/revision as the
+                    // smoke-tested Q6_K variant below.
+                    measured: {},
+                ),
+                (
                     id: "qwen3.5-4b-q6_k",
                     repo: "unsloth/Qwen3.5-4B-GGUF",
                     revision: "e87f176479d0855a907a41277aca2f8ee7a09523",
@@ -90,6 +137,20 @@
                 vision: false,
             ),
             variants: [
+                (
+                    id: "qwen3.5-9b-q4_k_m",
+                    repo: "unsloth/Qwen3.5-9B-GGUF",
+                    revision: "3885219b6810b007914f3a7950a8d1b469d598a5",
+                    files: ["Qwen3.5-9B-Q4_K_M.gguf"],
+                    format: Gguf,
+                    quant: Some("Q4_K_M"),
+                    download_bytes: 5680522464,
+                    // PENDING LAUNCH CHECK — same repo/revision as the
+                    // smoke-tested Q8_0 variant below. This is the variant
+                    // §7.0's 256k worked example assumes, so it's also the
+                    // one worth measuring first.
+                    measured: {},
+                ),
                 (
                     id: "qwen3.5-9b-q8_0",
                     repo: "unsloth/Qwen3.5-9B-GGUF",
@@ -125,6 +186,24 @@
             ),
             variants: [
                 (
+                    id: "qwen3.8-27b-ud-q4_k_m",
+                    repo: "unsloth/Qwen3.8-27B-GGUF",
+                    // A later revision than the Q5_K_S variant below: the
+                    // repo has been rebuilt since, and this file only exists
+                    // at the newer sha. Variants pin independently, so the
+                    // tested one keeps pointing at what was tested.
+                    revision: "4ca720788d1e01f1bff70c033e0d0028fd02e502",
+                    files: ["Qwen3.8-27B-UD-Q4_K_M.gguf"],
+                    format: Gguf,
+                    // Unsloth "dynamic" quant — mixed precision per tensor,
+                    // not a plain llama.cpp Q4_K_M. Named as published so
+                    // the launch label matches the file on disk.
+                    quant: Some("UD-Q4_K_M"),
+                    download_bytes: 16464440224,
+                    // PENDING LAUNCH CHECK
+                    measured: {},
+                ),
+                (
                     id: "qwen3.8-27b-q5_k_s",
                     repo: "unsloth/Qwen3.8-27B-GGUF",
                     revision: "f1bfb127c64f7072bdd2cad55f258b9c8b2910fe",
@@ -134,6 +213,369 @@
                     download_bytes: 19270036448,
                     // Smoke-tested only (health check + a real chat
                     // completion) — no depth run yet.
+                    measured: {},
+                ),
+            ],
+        ),
+        (
+            id: "ornith-1.0-9b",
+            display_name: "Ornith 1.0 9B",
+            family: "qwen3_5",
+            // Post-trained on Qwen 3.5 for agentic coding, and architecturally
+            // still Qwen 3.5: real checkpoints declare
+            // `model_type: "qwen3_5"` with `Qwen3_5ForConditionalGeneration`,
+            // the same hybrid GDN layout (`full_attention_interval: 4`) and
+            // the same 262144 native context. Crane added Ornith-specific
+            // tool-calling support (byte-identical chat template through
+            // `AutoTokenizer::apply_chat_template_with_tools`), so tools are a
+            // claimed capability here rather than an assumed one.
+            model_type: "qwen3_5",
+            params: 9000000000,
+            native_context: 262144,
+            capabilities: [Text, Tools],
+            license: "mit",
+            gated: false,
+            supports: (
+                isq: true,
+                kv_quant: true,
+                kv_swap: false,
+                vision: false,
+            ),
+            variants: [
+                (
+                    id: "ornith-1.0-9b-q4_k_m",
+                    repo: "ornith-ai/Ornith-1.0-9B-GGUF",
+                    revision: "3296bc7a404871a72ac3f1903f561459c09b5c17",
+                    // Lower-cased file names in the 1.0 repo, capitalized in
+                    // the 1.5 one — as published, not normalized.
+                    files: ["ornith-1.0-9b-Q4_K_M.gguf"],
+                    format: Gguf,
+                    quant: Some("Q4_K_M"),
+                    download_bytes: 5629108704,
+                    // PENDING LAUNCH CHECK
+                    measured: {},
+                ),
+                (
+                    id: "ornith-1.0-9b-q8_0",
+                    repo: "ornith-ai/Ornith-1.0-9B-GGUF",
+                    revision: "3296bc7a404871a72ac3f1903f561459c09b5c17",
+                    files: ["ornith-1.0-9b-Q8_0.gguf"],
+                    format: Gguf,
+                    quant: Some("Q8_0"),
+                    download_bytes: 9527500992,
+                    // PENDING LAUNCH CHECK
+                    measured: {},
+                ),
+            ],
+        ),
+        (
+            id: "ornith-1.5-9b",
+            display_name: "Ornith 1.5 9B",
+            family: "qwen3_5",
+            model_type: "qwen3_5",
+            params: 9000000000,
+            native_context: 262144,
+            capabilities: [Text, Tools],
+            license: "mit",
+            gated: false,
+            supports: (
+                isq: true,
+                kv_quant: true,
+                kv_swap: false,
+                vision: false,
+            ),
+            variants: [
+                (
+                    id: "ornith-1.5-9b-q4_k_m",
+                    repo: "ornith-ai/Ornith-1.5-9B-GGUF",
+                    revision: "abdd624b12ebf020b767fff532ff44fe552b28c3",
+                    // The repo also ships `mmproj-Ornith-1.5-9B-BF16.gguf`;
+                    // it is deliberately not downloaded, because Crane has no
+                    // GGUF/mmproj vision loader for this family (§2.12) — for
+                    // images, use the safetensors entry further down.
+                    files: ["Ornith-1.5-9B-Q4_K_M.gguf"],
+                    format: Gguf,
+                    quant: Some("Q4_K_M"),
+                    download_bytes: 5780090816,
+                    // PENDING LAUNCH CHECK
+                    measured: {},
+                ),
+                (
+                    id: "ornith-1.5-9b-q8_0",
+                    repo: "ornith-ai/Ornith-1.5-9B-GGUF",
+                    revision: "abdd624b12ebf020b767fff532ff44fe552b28c3",
+                    files: ["Ornith-1.5-9B-Q8_0.gguf"],
+                    format: Gguf,
+                    quant: Some("Q8_0"),
+                    download_bytes: 9786060384,
+                    // PENDING LAUNCH CHECK
+                    measured: {},
+                ),
+            ],
+        ),
+        (
+            id: "qwen3-0.6b",
+            display_name: "Qwen 3 0.6B",
+            family: "qwen3",
+            model_type: "qwen3",
+            params: 600000000,
+            // 40960 in the real `config.json` — Qwen 3's own extended default,
+            // not the 32768 its model card leads with, and well under this
+            // project's 256k target. That is fine (§10.3): a model's native
+            // maximum *is* the target when it is lower.
+            native_context: 40960,
+            capabilities: [Text, Tools],
+            license: "apache-2.0",
+            gated: false,
+            supports: (
+                // ISQ is qwen3_5-only in Crane's `create_backend` guard.
+                isq: false,
+                // KV-cache compression is Qwen 3.5-family only (§2.8) — plain
+                // Qwen 3 is dense softmax attention.
+                kv_quant: false,
+                kv_swap: false,
+                vision: false,
+            ),
+            variants: [
+                (
+                    id: "qwen3-0.6b-bf16",
+                    repo: "Qwen/Qwen3-0.6B",
+                    revision: "c1899de289a04d12100db370d81485cdf75e47ca",
+                    // Safetensors rather than the official `Qwen/Qwen3-0.6B-GGUF`
+                    // repo: Crane's Qwen 3 GGUF path has no embedded-tokenizer
+                    // support and bails with "Cannot find tokenizer.json near
+                    // …", which that repo does not ship. `merges.txt`/`vocab.json`
+                    // come along because the tokenizer references them.
+                    files: [
+                        "config.json",
+                        "generation_config.json",
+                        "merges.txt",
+                        "model.safetensors",
+                        "tokenizer.json",
+                        "tokenizer_config.json",
+                        "vocab.json",
+                    ],
+                    format: Safetensors,
+                    quant: None,
+                    download_bytes: 1519182365,
+                    // PENDING LAUNCH CHECK — the smallest entry in the
+                    // catalog, and therefore the cheapest one to verify.
+                    measured: {},
+                ),
+            ],
+        ),
+        (
+            id: "qwen3-4b",
+            display_name: "Qwen 3 4B",
+            family: "qwen3",
+            model_type: "qwen3",
+            params: 4000000000,
+            native_context: 40960,
+            capabilities: [Text, Tools],
+            license: "apache-2.0",
+            gated: false,
+            supports: (
+                isq: false,
+                kv_quant: false,
+                kv_swap: false,
+                vision: false,
+            ),
+            variants: [
+                (
+                    id: "qwen3-4b-bf16",
+                    repo: "Qwen/Qwen3-4B",
+                    revision: "1cfa9a7208912126459214e8b04321603b3df60c",
+                    files: [
+                        "config.json",
+                        "generation_config.json",
+                        "merges.txt",
+                        "model-00001-of-00003.safetensors",
+                        "model-00002-of-00003.safetensors",
+                        "model-00003-of-00003.safetensors",
+                        "model.safetensors.index.json",
+                        "tokenizer.json",
+                        "tokenizer_config.json",
+                        "vocab.json",
+                    ],
+                    format: Safetensors,
+                    quant: None,
+                    download_bytes: 8060896856,
+                    // PENDING LAUNCH CHECK
+                    measured: {},
+                ),
+            ],
+        ),
+        (
+            id: "qwen3-8b",
+            display_name: "Qwen 3 8B",
+            family: "qwen3",
+            model_type: "qwen3",
+            params: 8000000000,
+            native_context: 40960,
+            capabilities: [Text, Tools],
+            license: "apache-2.0",
+            gated: false,
+            supports: (
+                isq: false,
+                kv_quant: false,
+                kv_swap: false,
+                vision: false,
+            ),
+            variants: [
+                (
+                    id: "qwen3-8b-bf16",
+                    repo: "Qwen/Qwen3-8B",
+                    revision: "b968826d9c46dd6066d109eabc6255188de91218",
+                    files: [
+                        "config.json",
+                        "generation_config.json",
+                        "merges.txt",
+                        "model-00001-of-00005.safetensors",
+                        "model-00002-of-00005.safetensors",
+                        "model-00003-of-00005.safetensors",
+                        "model-00004-of-00005.safetensors",
+                        "model-00005-of-00005.safetensors",
+                        "model.safetensors.index.json",
+                        "tokenizer.json",
+                        "tokenizer_config.json",
+                        "vocab.json",
+                    ],
+                    format: Safetensors,
+                    quant: None,
+                    download_bytes: 16397431693,
+                    // PENDING LAUNCH CHECK
+                    measured: {},
+                ),
+            ],
+        ),
+        (
+            id: "qwen2.5-1.5b-instruct",
+            display_name: "Qwen 2.5 1.5B Instruct",
+            family: "qwen25",
+            model_type: "qwen25",
+            params: 1500000000,
+            native_context: 32768,
+            capabilities: [Text, Tools],
+            license: "apache-2.0",
+            gated: false,
+            supports: (
+                isq: false,
+                kv_quant: false,
+                kv_swap: false,
+                vision: false,
+            ),
+            variants: [
+                (
+                    id: "qwen2.5-1.5b-instruct-bf16",
+                    repo: "Qwen/Qwen2.5-1.5B-Instruct",
+                    revision: "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+                    // Safetensors is the only option here: Crane's Qwen 2.5
+                    // backend is `from_pretrained` only — it takes no
+                    // `ModelFormat` at all (§2.12's table agrees).
+                    files: [
+                        "config.json",
+                        "generation_config.json",
+                        "merges.txt",
+                        "model.safetensors",
+                        "tokenizer.json",
+                        "tokenizer_config.json",
+                        "vocab.json",
+                    ],
+                    format: Safetensors,
+                    quant: None,
+                    download_bytes: 3098955668,
+                    // PENDING LAUNCH CHECK
+                    measured: {},
+                ),
+            ],
+        ),
+        (
+            id: "qwen2.5-7b-instruct",
+            display_name: "Qwen 2.5 7B Instruct",
+            family: "qwen25",
+            model_type: "qwen25",
+            params: 7000000000,
+            native_context: 32768,
+            capabilities: [Text, Tools],
+            license: "apache-2.0",
+            gated: false,
+            supports: (
+                isq: false,
+                kv_quant: false,
+                kv_swap: false,
+                vision: false,
+            ),
+            variants: [
+                (
+                    id: "qwen2.5-7b-instruct-bf16",
+                    repo: "Qwen/Qwen2.5-7B-Instruct",
+                    revision: "a09a35458c702b33eeacc393d103063234e8bc28",
+                    files: [
+                        "config.json",
+                        "generation_config.json",
+                        "merges.txt",
+                        "model-00001-of-00004.safetensors",
+                        "model-00002-of-00004.safetensors",
+                        "model-00003-of-00004.safetensors",
+                        "model-00004-of-00004.safetensors",
+                        "model.safetensors.index.json",
+                        "tokenizer.json",
+                        "tokenizer_config.json",
+                        "vocab.json",
+                    ],
+                    format: Safetensors,
+                    quant: None,
+                    download_bytes: 15242788168,
+                    // PENDING LAUNCH CHECK
+                    measured: {},
+                ),
+            ],
+        ),
+        (
+            id: "hunyuan-7b-instruct",
+            display_name: "Hunyuan 7B Instruct",
+            family: "hunyuan",
+            // `config.json` says `hunyuan_v1_dense`, which Crane matches by
+            // substring (`m if m.contains("hunyuan")`) onto its HunyuanDense
+            // backend — the `--model-type hunyuan` spelling below is the
+            // canonical alias for it.
+            model_type: "hunyuan",
+            params: 7000000000,
+            native_context: 32768,
+            // Hunyuan's own chat template has no tool grammar, so tools are
+            // not claimed here.
+            capabilities: [Text],
+            license: "tencent-hunyuan-community",
+            gated: false,
+            supports: (
+                isq: false,
+                kv_quant: false,
+                kv_swap: false,
+                vision: false,
+            ),
+            variants: [
+                (
+                    id: "hunyuan-7b-instruct-bf16",
+                    repo: "tencent/Hunyuan-7B-Instruct",
+                    revision: "6fd6ecb05e76589bc43b79f49e3619445c6b4593",
+                    // Crane does have a Hunyuan GGUF loader, but it requires a
+                    // sibling `tokenizer.json` that no published Hunyuan GGUF
+                    // repo ships, so this entry is safetensors.
+                    files: [
+                        "config.json",
+                        "generation_config.json",
+                        "model-00001-of-00004.safetensors",
+                        "model-00002-of-00004.safetensors",
+                        "model-00003-of-00004.safetensors",
+                        "model-00004-of-00004.safetensors",
+                        "model.safetensors.index.json",
+                        "tokenizer.json",
+                        "tokenizer_config.json",
+                    ],
+                    format: Safetensors,
+                    quant: None,
+                    download_bytes: 15025598606,
+                    // PENDING LAUNCH CHECK
                     measured: {},
                 ),
             ],
@@ -157,7 +599,10 @@
             license: "apache-2.0",
             gated: false,
             supports: (
-                isq: true,
+                // Crane's `create_backend` rejects `--quant` for everything
+                // except `qwen3_5`, so ISQ is not available here — use one of
+                // the published GGUF variants below instead.
+                isq: false,
                 // Qwen 3.5-family-only (§2.8) — MiniCPM5 is a plain dense
                 // architecture, not the hybrid GDN family.
                 kv_quant: false,
@@ -165,6 +610,18 @@
                 vision: false,
             ),
             variants: [
+                (
+                    id: "minicpm5-1b-q4_k_m",
+                    repo: "openbmb/MiniCPM5-1B-GGUF",
+                    revision: "3d55fac80935ae6456986ad2384b5cbcc4d6c948",
+                    files: ["MiniCPM5-1B-Q4_K_M.gguf"],
+                    format: Gguf,
+                    quant: Some("Q4_K_M"),
+                    download_bytes: 688065920,
+                    // PENDING LAUNCH CHECK — same repo/revision as the
+                    // smoke-tested Q8_0 variant below.
+                    measured: {},
+                ),
                 (
                     id: "minicpm5-1b-q8_0",
                     repo: "openbmb/MiniCPM5-1B-GGUF",
@@ -176,6 +633,232 @@
                     // Smoke-tested only (health check + a real chat
                     // completion, via the explicit --model-type above) —
                     // no depth run yet.
+                    measured: {},
+                ),
+                (
+                    id: "minicpm5-1b-bf16",
+                    repo: "openbmb/MiniCPM5-1B",
+                    revision: "87179e5c1f455ef22e6223592d2d61351b525bfc",
+                    files: [
+                        "chat_template.jinja",
+                        "config.json",
+                        "generation_config.json",
+                        "model-00000-of-00001.safetensors",
+                        "model.safetensors.index.json",
+                        "special_tokens_map.json",
+                        "tokenizer.json",
+                        "tokenizer_config.json",
+                    ],
+                    format: Safetensors,
+                    quant: None,
+                    download_bytes: 2171308155,
+                    // PENDING LAUNCH CHECK — the unquantized weights, for
+                    // comparing quantization loss against the GGUFs above.
+                    measured: {},
+                ),
+            ],
+        ),
+        (
+            id: "qwen3.5-4b-vision",
+            display_name: "Qwen 3.5 4B (vision)",
+            family: "qwen3_5_vl",
+            // The same checkpoint family as the text `qwen3.5-4b` entry, but
+            // launched through Crane's VL backend: the repo's `config.json`
+            // carries a `vision_config`, which is exactly what
+            // `detect_model_type` keys on to resolve `qwen3_5` →
+            // `Qwen3_5VL`. Launch it as `qwen3_5` (or pass `--text-only`) to
+            // get the text tower on its own.
+            model_type: "qwen3_5_vl",
+            params: 4000000000,
+            native_context: 262144,
+            capabilities: [Text, Tools, Vision],
+            license: "apache-2.0",
+            gated: false,
+            supports: (
+                // Every VL family rejects `--quant` (§2.12), and Crane's own
+                // guard only ever allows it for plain `qwen3_5`.
+                isq: false,
+                // KV compression is implemented on the text-only qwen3_5
+                // path, not the VL one.
+                kv_quant: false,
+                kv_swap: false,
+                vision: true,
+            ),
+            variants: [
+                (
+                    id: "qwen3.5-4b-vision-bf16",
+                    repo: "Qwen/Qwen3.5-4B",
+                    revision: "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+                    // Yes, the shard names really are
+                    // `model.safetensors-0000N-of-00002.safetensors` in this
+                    // repo — listed as published, since the downloader asks
+                    // for exact paths.
+                    files: [
+                        "chat_template.jinja",
+                        "config.json",
+                        "merges.txt",
+                        "model.safetensors-00001-of-00002.safetensors",
+                        "model.safetensors-00002-of-00002.safetensors",
+                        "model.safetensors.index.json",
+                        "preprocessor_config.json",
+                        "tokenizer.json",
+                        "tokenizer_config.json",
+                        "video_preprocessor_config.json",
+                        "vocab.json",
+                    ],
+                    format: Safetensors,
+                    quant: None,
+                    download_bytes: 9342816694,
+                    // PENDING LAUNCH CHECK
+                    measured: {},
+                ),
+            ],
+        ),
+        (
+            id: "ornith-1.0-9b-vision",
+            display_name: "Ornith 1.0 9B (vision)",
+            family: "qwen3_5_vl",
+            model_type: "qwen3_5_vl",
+            params: 9000000000,
+            native_context: 262144,
+            capabilities: [Text, Tools, Vision],
+            license: "mit",
+            gated: false,
+            supports: (
+                isq: false,
+                kv_quant: false,
+                kv_swap: false,
+                vision: true,
+            ),
+            variants: [
+                (
+                    id: "ornith-1.0-9b-vision-bf16",
+                    repo: "ornith-ai/Ornith-1.0-9B",
+                    revision: "83dc1f5e24ef8527af019a6b3bf66ac0f1c2c999",
+                    files: [
+                        "chat_template.jinja",
+                        "config.json",
+                        "generation_config.json",
+                        "model-00001-of-00004.safetensors",
+                        "model-00002-of-00004.safetensors",
+                        "model-00003-of-00004.safetensors",
+                        "model-00004-of-00004.safetensors",
+                        "model.safetensors.index.json",
+                        "preprocessor_config.json",
+                        "processor_config.json",
+                        "tokenizer.json",
+                        "tokenizer_config.json",
+                        "video_preprocessor_config.json",
+                        "vocab.json",
+                    ],
+                    format: Safetensors,
+                    quant: None,
+                    download_bytes: 18846516247,
+                    // PENDING LAUNCH CHECK — but the least speculative of the
+                    // pending entries: this exact checkpoint is what Crane's
+                    // own `minicpm_v_generate` test pulls its sample image
+                    // from, so a copy of it has been on a Crane developer's
+                    // disk. Still needs one real vision request through
+                    // CraneStudio before the marker comes off.
+                    measured: {},
+                ),
+            ],
+        ),
+        (
+            id: "ornith-1.5-9b-vision",
+            display_name: "Ornith 1.5 9B (vision)",
+            family: "qwen3_5_vl",
+            model_type: "qwen3_5_vl",
+            params: 9000000000,
+            native_context: 262144,
+            capabilities: [Text, Tools, Vision],
+            license: "mit",
+            gated: false,
+            supports: (
+                isq: false,
+                kv_quant: false,
+                kv_swap: false,
+                vision: true,
+            ),
+            variants: [
+                (
+                    id: "ornith-1.5-9b-vision-bf16",
+                    repo: "ornith-ai/Ornith-1.5-9B",
+                    revision: "489cb97981b8654bcfcf30ce1f94ed1b62e07b53",
+                    // No `generation_config.json` in this repo (1.0 has one) —
+                    // sampling defaults come from the request instead.
+                    files: [
+                        "chat_template.jinja",
+                        "config.json",
+                        "merges.txt",
+                        "model-00001-of-00004.safetensors",
+                        "model-00002-of-00004.safetensors",
+                        "model-00003-of-00004.safetensors",
+                        "model-00004-of-00004.safetensors",
+                        "model.safetensors.index.json",
+                        "preprocessor_config.json",
+                        "processor_config.json",
+                        "tokenizer.json",
+                        "tokenizer_config.json",
+                        "video_preprocessor_config.json",
+                        "vocab.json",
+                    ],
+                    format: Safetensors,
+                    quant: None,
+                    download_bytes: 19329287400,
+                    // PENDING LAUNCH CHECK
+                    measured: {},
+                ),
+            ],
+        ),
+        (
+            id: "gemma-4-e2b-it",
+            display_name: "Gemma 4 E2B Instruct",
+            family: "gemma4_vl",
+            // `config.json` is `gemma4` + a `vision_config`, which resolves to
+            // Crane's Gemma4VL backend (safetensors only). Note the repo is
+            // *not* gated today — §2.12's "gated repo on HF" note predates
+            // this release, and the API reports `gated: false` at the pinned
+            // sha. If that changes, a token from `cranestudio config set
+            // hf-token` covers it.
+            model_type: "gemma4_vl",
+            // "E2B" is ~2B *effective* parameters (per-layer embeddings and
+            // MatFormer slicing), but ~5B on disk — which is what the download
+            // size and the VRAM prediction actually follow.
+            params: 5000000000,
+            native_context: 131072,
+            // Gemma's chat template has no tool grammar, so no Tools here.
+            capabilities: [Text, Vision],
+            license: "apache-2.0",
+            gated: false,
+            supports: (
+                isq: false,
+                kv_quant: false,
+                kv_swap: false,
+                vision: true,
+            ),
+            variants: [
+                (
+                    id: "gemma-4-e2b-it-bf16",
+                    repo: "google/gemma-4-E2B-it",
+                    revision: "3e22461f65e89153144f8adb70e3b8c2cc9845a7",
+                    // The GGUF builds of this model (unsloth, ggml-org) are
+                    // deliberately not used: Crane's Gemma 4 GGUF path bails
+                    // with "Cannot find tokenizer.json near …" and none of
+                    // those repos ship one.
+                    files: [
+                        "chat_template.jinja",
+                        "config.json",
+                        "generation_config.json",
+                        "model.safetensors",
+                        "processor_config.json",
+                        "tokenizer.json",
+                        "tokenizer_config.json",
+                    ],
+                    format: Safetensors,
+                    quant: None,
+                    download_bytes: 10278820046,
+                    // PENDING LAUNCH CHECK
                     measured: {},
                 ),
             ],
