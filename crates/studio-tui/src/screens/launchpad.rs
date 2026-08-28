@@ -52,7 +52,22 @@ pub fn rows(app: &App) -> Vec<Row> {
     // died is the single thing a user most needs told about, and `Enter` on it
     // opens the ready screen where the exit classification is spelled out.
     let mut rows: Vec<Row> = (0..app.last_running.len()).map(Row::Running).collect();
-    rows.extend((0..app.local_models.len()).map(Row::Local));
+    // A model that's already serving is listed once, as the running thing it is
+    // — not again underneath as a file you could launch. Launch labels are the
+    // weight file's name (`…-Q4_K_M.gguf`), which is the scan's own name plus
+    // the extension.
+    rows.extend(
+        app.local_models
+            .iter()
+            .enumerate()
+            .filter(|(_, model)| {
+                !app.last_running.iter().any(|child| {
+                    child.state.is_running()
+                        && child.info.label.trim_end_matches(".gguf") == model.name
+                })
+            })
+            .map(|(i, _)| Row::Local(i)),
+    );
     rows.push(Row::Browse);
     rows
 }
@@ -230,7 +245,9 @@ fn item(app: &App, row: Row, selected: bool, width: u16) -> ListItem<'static> {
                 let note = match &child.state {
                     ChildState::Healthy => "ready — enter to open apps".to_string(),
                     ChildState::Starting => "starting — loading weights".to_string(),
-                    ChildState::Exited { classification, .. } => format!("exited ({classification})"),
+                    ChildState::Exited { classification, .. } => {
+                        format!("exited ({classification})")
+                    }
                     ChildState::Unknown => "status unknown".to_string(),
                 };
                 let port = app.known_ports.get(&child.info.id).copied();
@@ -241,7 +258,12 @@ fn item(app: &App, row: Row, selected: bool, width: u16) -> ListItem<'static> {
                     vec![
                         Span::styled(format!("{glyph_text} "), Style::new().fg(color)),
                         Span::styled(
-                            crate::ui::text::truncate(&child.info.label, 52),
+                            // Launch labels are weight filenames; the extension
+                            // is noise once it's the thing that's running.
+                            crate::ui::text::truncate(
+                                child.info.label.trim_end_matches(".gguf"),
+                                52,
+                            ),
                             title_style(&app.theme, selected, true),
                         ),
                     ],
@@ -263,10 +285,7 @@ fn item(app: &App, row: Row, selected: bool, width: u16) -> ListItem<'static> {
             width,
             vec![
                 Span::styled("+ ", Style::new().fg(app.theme.accent_alt)),
-                Span::styled(
-                    "Get more models",
-                    title_style(&app.theme, selected, true),
-                ),
+                Span::styled("Get more models", title_style(&app.theme, selected, true)),
             ],
             Vec::new(),
             vec![Span::styled(
@@ -311,7 +330,10 @@ fn local_item(app: &App, model: &LocalModel, selected: bool, width: u16) -> List
         app,
         selected,
         width,
-        vec![mark, Span::styled(crate::ui::text::truncate(&model.name, 52), name_color)],
+        vec![
+            mark,
+            Span::styled(crate::ui::text::truncate(&model.name, 52), name_color),
+        ],
         vec![Span::styled(
             crate::fmt::bytes(model.size),
             Style::new().fg(if model.supported {

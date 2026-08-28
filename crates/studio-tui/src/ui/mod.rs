@@ -214,7 +214,8 @@ pub fn hint_line_fitted(theme: &Theme, hints: &[(&str, &str)], width: u16) -> Li
     let mut fitted: Vec<(&str, &str)> = Vec::new();
     let mut used = 0usize;
     for (key, label) in hints {
-        let cost = key.chars().count() + label.chars().count() + 1 + usize::from(!fitted.is_empty()) * 3;
+        let cost =
+            key.chars().count() + label.chars().count() + 1 + usize::from(!fitted.is_empty()) * 3;
         if used + cost > width as usize {
             break;
         }

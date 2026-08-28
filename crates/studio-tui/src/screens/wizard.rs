@@ -110,18 +110,17 @@ pub fn load_local(app: &mut App, candidate: &LocalCandidate) {
 /// A model that doesn't fit is the one case that stops and explains itself.
 pub fn quick_launch(app: &mut App, model: &LocalModel) {
     if !model.supported {
-        app.message = Some(Message::error(
-            model
-                .reason
-                .clone()
-                .unwrap_or_else(|| "this model isn't a Crane-supported architecture".to_string()),
-        ));
+        app.message = Some(Message::error(model.reason.clone().unwrap_or_else(|| {
+            "this model isn't a Crane-supported architecture".to_string()
+        })));
         return;
     }
 
     load_local(app, &model.candidate);
     if let Some(err) = app.wizard.error.clone() {
-        app.message = Some(Message::error(format!("could not evaluate this model: {err}")));
+        app.message = Some(Message::error(format!(
+            "could not evaluate this model: {err}"
+        )));
         return;
     }
     if matches!(app.wizard.result, Some(SolveResult::Unusable { .. })) {
@@ -413,10 +412,7 @@ pub fn render(app: &mut App, frame: &mut Frame) {
 
     let Some(result) = app.wizard.result.clone() else {
         let block = app.theme.block("");
-        frame.render_widget(
-            Paragraph::new("no model selected").block(block),
-            body,
-        );
+        frame.render_widget(Paragraph::new("no model selected").block(block), body);
         return;
     };
 
@@ -438,7 +434,10 @@ pub fn render(app: &mut App, frame: &mut Frame) {
 /// — the shape §4.4 asks for: an answer first, knobs second.
 fn render_reaches(app: &App, configs: &[SolvedConfig], frame: &mut Frame, area: Rect) {
     let db = MeasurementDb::load(&studio_core::paths::measurements_file());
-    let selected = app.wizard.selected_config.min(configs.len().saturating_sub(1));
+    let selected = app
+        .wizard
+        .selected_config
+        .min(configs.len().saturating_sub(1));
     let Some(chosen) = configs.get(selected) else {
         return;
     };
@@ -533,7 +532,10 @@ fn render_short(
     let total: u64 = blockers.iter().map(|b| b.bytes).sum();
     for blocker in blockers {
         let mut spans = vec![Span::styled(
-            format!("{:<18}", crate::ui::text::truncate(&blocker.description, 17)),
+            format!(
+                "{:<18}",
+                crate::ui::text::truncate(&blocker.description, 17)
+            ),
             app.theme.muted_style(),
         )];
         spans.extend(bars::progress_bar(
@@ -583,7 +585,10 @@ fn render_unusable(
                 format!("{} ", glyph::ARROW),
                 Style::new().fg(app.theme.accent),
             ),
-            Span::styled(describe_suggestion(suggestion), Style::new().fg(app.theme.text)),
+            Span::styled(
+                describe_suggestion(suggestion),
+                Style::new().fg(app.theme.text),
+            ),
         ]));
     }
     frame.render_widget(Paragraph::new(lines), inner);
@@ -611,9 +616,7 @@ fn config_card(
             ),
             Span::styled(
                 crate::ui::text::truncate(&config.variant_label, 46),
-                Style::new()
-                    .fg(app.theme.text)
-                    .add_modifier(Modifier::BOLD),
+                Style::new().fg(app.theme.text).add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::raw(""),

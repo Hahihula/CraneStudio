@@ -15,11 +15,7 @@ use crate::theme::Theme;
 use crate::ui::bars::{self, ratio};
 use crate::ui::{self, Chrome};
 
-const HINTS: &[(&str, &str)] = &[
-    ("esc", "back"),
-    ("f2", "theme"),
-    ("q", "quit"),
-];
+const HINTS: &[(&str, &str)] = &[("esc", "back"), ("f2", "theme"), ("q", "quit")];
 
 /// Rows the compact meter block occupies, so callers can size a panel for it
 /// without guessing: CPU, its history strip, RAM, one row per GPU, disk.
@@ -72,17 +68,14 @@ pub fn meters(
     trend.extend(bars::sparkline(theme, &history.cpu, bar));
     if let Some(sample) = live {
         trend.push(Span::styled("  cores ", theme.muted_style()));
-        trend.extend(bars::core_strip(
-            theme,
-            &fold_cores(&sample.per_core, 24),
-        ));
+        trend.extend(bars::core_strip(theme, &fold_cores(&sample.per_core, 24)));
     }
     lines.push(Line::from(trend));
 
-    let (ram_total, ram_available) = live.map_or(
-        (hardware.ram_total, hardware.ram_available),
-        |s| (s.ram_total, s.ram_available),
-    );
+    let (ram_total, ram_available) = live
+        .map_or((hardware.ram_total, hardware.ram_available), |s| {
+            (s.ram_total, s.ram_available)
+        });
     let ram_used = ram_total.saturating_sub(ram_available);
     let ram_ratio = ratio(ram_used, ram_total);
     lines.push(bars::meter(
@@ -221,14 +214,12 @@ pub fn panel(app: &App, frame: &mut Frame, area: Rect, title: &str) {
     let inner = block.inner(area);
     frame.render_widget(
         block.title_bottom(
-            Line::from(vec![
-                Span::styled(
-                    format!(" {} ", backend_label(app.hardware.backend)),
-                    Style::new()
-                        .fg(app.theme.accent_alt)
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ])
+            Line::from(vec![Span::styled(
+                format!(" {} ", backend_label(app.hardware.backend)),
+                Style::new()
+                    .fg(app.theme.accent_alt)
+                    .add_modifier(Modifier::BOLD),
+            )])
             .right_aligned(),
         ),
         area,
@@ -330,11 +321,7 @@ fn gpu_lines(app: &App, width: u16) -> Vec<Line<'static>> {
             ),
         ));
         if let Some((major, minor)) = gpu.compute_capability {
-            lines.push(ui::field(
-                &app.theme,
-                "compute",
-                format!("{major}.{minor}"),
-            ));
+            lines.push(ui::field(&app.theme, "compute", format!("{major}.{minor}")));
         }
         if let Some(driver) = &gpu.driver_version {
             lines.push(ui::field(&app.theme, "driver", driver.clone()));

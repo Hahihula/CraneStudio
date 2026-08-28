@@ -73,13 +73,7 @@ pub fn render(frame: &mut Frame, theme: &Theme, choice: QuitChoice, running: &[C
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-fn option(
-    theme: &Theme,
-    key: &str,
-    title: &str,
-    blurb: &str,
-    selected: bool,
-) -> Line<'static> {
+fn option(theme: &Theme, key: &str, title: &str, blurb: &str, selected: bool) -> Line<'static> {
     let (marker, title_style) = if selected {
         (
             Span::styled(
@@ -89,10 +83,7 @@ fn option(
             Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
         )
     } else {
-        (
-            Span::raw("  "),
-            Style::new().fg(theme.text),
-        )
+        (Span::raw("  "), Style::new().fg(theme.text))
     };
     Line::from(vec![
         marker,

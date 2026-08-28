@@ -169,7 +169,10 @@ mod tests {
     fn recovers_the_repo_from_the_models_directory_layout() {
         let root = Path::new("/models");
         assert_eq!(
-            repo_of(root, Path::new("/models/unsloth/Qwen3.5-9B-GGUF/abc123/m.gguf")),
+            repo_of(
+                root,
+                Path::new("/models/unsloth/Qwen3.5-9B-GGUF/abc123/m.gguf")
+            ),
             Some("unsloth/Qwen3.5-9B-GGUF".to_string())
         );
         assert_eq!(repo_of(root, Path::new("/elsewhere/m.gguf")), None);

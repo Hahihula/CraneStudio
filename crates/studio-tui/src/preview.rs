@@ -10,9 +10,9 @@
 
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use studio_core::catalog::Classification;
 use studio_core::catalog::local::LocalCandidate;
 use studio_core::catalog::schema::Format;
-use studio_core::catalog::Classification;
 use studio_core::estimator::{ModelConfig, SolveRequest, Variant, solve};
 use studio_core::hardware::{Backend, CpuInfo, DiskInfo, GpuInfo, HardwareReport, Sample};
 
@@ -75,7 +75,13 @@ pub(crate) fn history() -> History {
     history
 }
 
-fn local(name: &str, size: u64, quant: Option<&str>, supported: bool) -> LocalModel {
+fn local(
+    name: &str,
+    model_type: &str,
+    size: u64,
+    quant: Option<&str>,
+    supported: bool,
+) -> LocalModel {
     let path = std::path::PathBuf::from(format!(
         "/home/dev/.local/share/cranestudio/models/unsloth/{name}-GGUF/main/{name}.gguf"
     ));
@@ -85,6 +91,9 @@ fn local(name: &str, size: u64, quant: Option<&str>, supported: bool) -> LocalMo
             format: Format::Gguf,
             classification: if supported {
                 Classification::Supported {
+                    // A borrowed &'static str in the real type; the previews only
+                    // need it to be *a* family name, and the row shows
+                    // `model_type` below anyway.
                     model_type: "qwen3_5",
                     vision: false,
                     gated: false,
@@ -101,7 +110,7 @@ fn local(name: &str, size: u64, quant: Option<&str>, supported: bool) -> LocalMo
         quant: quant.map(str::to_string),
         size,
         supported,
-        model_type: supported.then(|| "qwen3_5".to_string()),
+        model_type: supported.then(|| model_type.to_string()),
         reason: (!supported).then(|| "phi3 is not a Crane-supported architecture".to_string()),
     }
 }
@@ -121,11 +130,40 @@ fn running(id: u64, label: &str, state: ChildState) -> ChildSummary {
 fn populated() -> App {
     let mut app = App::mock();
     app.local_models = vec![
-        local("Qwen3.5-9B-Instruct-Q4_K_M", 5_800_000_000, Some("Q4_K_M"), true),
-        local("gemma-4-4b-it-Q6_K", 3_400_000_000, Some("Q6_K"), true),
-        local("Phi-3-mini-4k-instruct-Q8_0", 4_060_000_000, Some("Q8_0"), false),
+        local(
+            "Qwen3.5-9B-Instruct-Q4_K_M",
+            "qwen3_5",
+            5_800_000_000,
+            Some("Q4_K_M"),
+            true,
+        ),
+        local(
+            "gemma-4-4b-it-Q6_K",
+            "gemma4",
+            3_400_000_000,
+            Some("Q6_K"),
+            true,
+        ),
+        local(
+            "MiniCPM-V-4_6-Q4_K_M",
+            "minicpmv4_6",
+            2_600_000_000,
+            Some("Q4_K_M"),
+            true,
+        ),
+        local(
+            "Phi-3-mini-4k-instruct-Q8_0",
+            "phi3",
+            4_060_000_000,
+            Some("Q8_0"),
+            false,
+        ),
     ];
-    app.last_running = vec![running(1, "Qwen3.5-9B-Instruct-Q4_K_M", ChildState::Healthy)];
+    app.last_running = vec![running(
+        1,
+        "Qwen3.5-9B-Instruct-Q4_K_M.gguf",
+        ChildState::Healthy,
+    )];
     app.known_ports.insert(1, 41100);
     app.launchpad.selected = 1;
     app
@@ -178,7 +216,10 @@ fn solved() -> studio_core::estimator::SolveResult {
 fn show(caption: &str, width: u16, height: u16, app: &mut App) {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|frame| app.render_for_test(frame)).unwrap();
-    println!("\n### {caption}  ({width}×{height})\n{}", terminal.backend());
+    println!(
+        "\n### {caption}  ({width}×{height})\n{}",
+        terminal.backend()
+    );
 }
 
 #[test]
@@ -188,8 +229,10 @@ fn preview_splash() {
     app.local_scan_done = false;
     show("splash — still booting", 100, 30, &mut app);
     app.local_scan_done = true;
-    app.browser
-        .set_catalog(studio_core::catalog::load::bundled(), studio_core::catalog::Source::Bundled);
+    app.browser.set_catalog(
+        studio_core::catalog::load::bundled(),
+        studio_core::catalog::Source::Bundled,
+    );
     show("splash — ready", 120, 32, &mut app);
     show("splash — small terminal", 80, 20, &mut app);
 }
@@ -211,17 +254,20 @@ fn preview_download() {
     app.screen = Screen::Download;
     app.download.label = "Qwen3.5 9B Instruct · Q4_K_M".to_string();
     app.download.repo = "unsloth/Qwen3.5-9B-Instruct-GGUF · main".to_string();
-    app.download.apply_event(&studio_core::download::Event::Progress {
-        file: "Qwen3.5-9B-Instruct-Q4_K_M.gguf".to_string(),
-        downloaded: 3_100_000_000,
-        total: 5_800_000_000,
-    });
-    app.download.apply_event(&studio_core::download::Event::Completed {
-        file: "tokenizer.json".to_string(),
-    });
-    app.download.apply_event(&studio_core::download::Event::Verifying {
-        file: "params.json".to_string(),
-    });
+    app.download
+        .apply_event(&studio_core::download::Event::Progress {
+            file: "Qwen3.5-9B-Instruct-Q4_K_M.gguf".to_string(),
+            downloaded: 3_100_000_000,
+            total: 5_800_000_000,
+        });
+    app.download
+        .apply_event(&studio_core::download::Event::Completed {
+            file: "tokenizer.json".to_string(),
+        });
+    app.download
+        .apply_event(&studio_core::download::Event::Verifying {
+            file: "params.json".to_string(),
+        });
     app.download.speed = 46_000_000.0;
     app.download.speed_history = (0..40)
         .map(|i| 30_000_000.0 + f64::from(i % 9) * 3_000_000.0)
@@ -293,8 +339,10 @@ fn preview_chat() {
 fn preview_browser() {
     let mut app = populated();
     app.screen = Screen::Browser;
-    app.browser
-        .set_catalog(studio_core::catalog::load::bundled(), studio_core::catalog::Source::Bundled);
+    app.browser.set_catalog(
+        studio_core::catalog::load::bundled(),
+        studio_core::catalog::Source::Bundled,
+    );
     show("get models — catalog", 120, 30, &mut app);
 
     app.browser.tab = screens::browser::Tab::Search;

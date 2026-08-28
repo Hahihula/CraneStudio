@@ -112,7 +112,10 @@ pub struct History {
 
 impl History {
     fn push(&mut self, sample: &Sample) {
-        push_capped(&mut self.cpu, f64::from(sample.cpu_total.clamp(0.0, 100.0)) / 100.0);
+        push_capped(
+            &mut self.cpu,
+            f64::from(sample.cpu_total.clamp(0.0, 100.0)) / 100.0,
+        );
         push_capped(
             &mut self.ram,
             crate::ui::bars::ratio(

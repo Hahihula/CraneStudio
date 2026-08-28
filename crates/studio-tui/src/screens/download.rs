@@ -118,23 +118,25 @@ impl State {
     /// Total bytes in flight across every file, and the total expected.
     #[must_use]
     pub fn totals(&self) -> (u64, u64) {
-        self.lines.iter().fold((0, 0), |(done, total), (_, status)| {
-            match status {
-                FileStatus::Starting {
-                    resumed_from,
-                    total: file_total,
-                } => (done + resumed_from, total + file_total),
-                FileStatus::Progress {
-                    downloaded,
-                    total: file_total,
-                } => (done + downloaded, total + file_total),
-                // A completed file's own total is no longer reported by the
-                // event stream, so it's held at whatever it last was.
-                FileStatus::Verifying | FileStatus::Completed | FileStatus::Cancelled => {
-                    (done, total)
+        self.lines
+            .iter()
+            .fold((0, 0), |(done, total), (_, status)| {
+                match status {
+                    FileStatus::Starting {
+                        resumed_from,
+                        total: file_total,
+                    } => (done + resumed_from, total + file_total),
+                    FileStatus::Progress {
+                        downloaded,
+                        total: file_total,
+                    } => (done + downloaded, total + file_total),
+                    // A completed file's own total is no longer reported by the
+                    // event stream, so it's held at whatever it last was.
+                    FileStatus::Verifying | FileStatus::Completed | FileStatus::Cancelled => {
+                        (done, total)
+                    }
                 }
-            }
-        })
+            })
     }
 
     /// Called once per app tick: turns the byte counter into a throughput
@@ -344,8 +346,7 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     let body = ui::shell(frame, &app.theme, &chrome);
 
     if let Some(err) = app.download.error.clone() {
-        let [panel, _] =
-            Layout::vertical([Constraint::Length(9), Constraint::Min(0)]).areas(body);
+        let [panel, _] = Layout::vertical([Constraint::Length(9), Constraint::Min(0)]).areas(body);
         render_failure(app, &err, frame, panel);
         return;
     }
@@ -374,7 +375,10 @@ fn render_headline(app: &App, frame: &mut Frame, area: Rect) {
     let bar_width = inner.width.saturating_sub(16).clamp(10, 60);
 
     let mut headline = vec![Span::styled(
-        crate::ui::text::truncate(&app.download.label, (inner.width as usize).saturating_sub(10)),
+        crate::ui::text::truncate(
+            &app.download.label,
+            (inner.width as usize).saturating_sub(10),
+        ),
         Style::new().fg(app.theme.text).add_modifier(Modifier::BOLD),
     )];
     if app.download.finished() {
@@ -384,12 +388,7 @@ fn render_headline(app: &App, frame: &mut Frame, area: Rect) {
         ));
     }
 
-    let mut bar = bars::progress_bar(
-        &app.theme,
-        bar_width,
-        done,
-        app.theme.progress_color(done),
-    );
+    let mut bar = bars::progress_bar(&app.theme, bar_width, done, app.theme.progress_color(done));
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let percent = (done * 100.0).round() as u32;
     bar.push(Span::styled(

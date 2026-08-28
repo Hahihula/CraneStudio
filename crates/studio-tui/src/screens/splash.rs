@@ -104,10 +104,7 @@ fn steps_line(theme: &Theme, tick: u64, steps: &[Step]) -> Line<'static> {
             spans.push(Span::styled("   ", theme.muted_style()));
         }
         let (mark, style) = if step.done {
-            (
-                glyph::DONE.to_string(),
-                Style::new().fg(theme.success),
-            )
+            (glyph::DONE.to_string(), Style::new().fg(theme.success))
         } else {
             (
                 crate::theme::spinner(tick).to_string(),

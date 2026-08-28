@@ -54,7 +54,12 @@ impl Sampler {
 
         Sample {
             cpu_total: self.sys.global_cpu_usage(),
-            per_core: self.sys.cpus().iter().map(sysinfo::Cpu::cpu_usage).collect(),
+            per_core: self
+                .sys
+                .cpus()
+                .iter()
+                .map(sysinfo::Cpu::cpu_usage)
+                .collect(),
             ram_total: self.sys.total_memory(),
             ram_available: self.sys.available_memory(),
             gpus: gpu::probe(),

@@ -44,11 +44,20 @@ pub fn load_bar(theme: &Theme, width: u16, filled_ratio: f64) -> Vec<Span<'stati
 /// As `load_bar`, but every filled cell takes one flat color — for progress
 /// (a download, a launch) where position along the bar carries no meaning.
 #[must_use]
-pub fn progress_bar(theme: &Theme, width: u16, filled_ratio: f64, color: Color) -> Vec<Span<'static>> {
+pub fn progress_bar(
+    theme: &Theme,
+    width: u16,
+    filled_ratio: f64,
+    color: Color,
+) -> Vec<Span<'static>> {
     bar_spans(theme, width, filled_ratio, Some(color))
 }
 
-#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
 fn bar_spans(
     theme: &Theme,
     width: u16,

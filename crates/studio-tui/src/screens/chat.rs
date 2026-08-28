@@ -689,10 +689,7 @@ fn render_transcript(app: &mut App, frame: &mut Frame, area: Rect) {
         }
     }
 
-    frame.render_widget(
-        Paragraph::new(lines).scroll((app.chat.scroll, 0)),
-        inner,
-    );
+    frame.render_widget(Paragraph::new(lines).scroll((app.chat.scroll, 0)), inner);
 }
 
 /// The transcript, already wrapped: each turn gets a colored gutter bar and a
@@ -722,14 +719,8 @@ fn transcript_lines(app: &App, width: u16) -> Vec<Line<'static>> {
             Role::Assistant => ("model", app.theme.accent_alt),
         };
         lines.push(Line::from(vec![
-            Span::styled(
-                format!("{} ", glyph::BAR_HALF),
-                Style::new().fg(color),
-            ),
-            Span::styled(
-                label,
-                Style::new().fg(color).add_modifier(Modifier::BOLD),
-            ),
+            Span::styled(format!("{} ", glyph::BAR_HALF), Style::new().fg(color)),
+            Span::styled(label, Style::new().fg(color).add_modifier(Modifier::BOLD)),
         ]));
         // `(thinking)` / `(answer)` markers are inserted by `apply_delta` when a
         // reasoning model switches fields mid-answer. The thinking label earns
