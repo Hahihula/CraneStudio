@@ -1,0 +1,511 @@
+# CraneStudio CI — GitLab is the primary repository (PLAN.md §12).
+#
+# What this pipeline is for: **the binaries a non-developer downloads are built
+# here, from this source, on every tag.** Nothing is ever uploaded by hand. Each
+# archive carries a `BUILD-PROVENANCE.txt` naming the commit, the tag, the Rust
+# version, the pinned Crane revision and the runner that built it, and every
+# archive is published with its SHA-256.
+#
+# ── Runners ───────────────────────────────────────────────────────────────────
+# The GPU backends are compile-time choices (§2.5), so each one needs its own
+# runner. Register them with these tags:
+#
+#   `docker`        any Linux docker executor — checks and the CPU build
+#   `cuda`          Linux, NVIDIA GPU + CUDA toolkit (nvcc). Docker executor
+#                   with the NVIDIA container runtime, or a shell executor that
+#                   already has CUDA and rustup: set CRANESTUDIO_SHELL_RUNNER=1
+#                   as a runner variable and the job skips its own toolchain
+#                   setup.
+#   `metal`,`macos` Apple Silicon, shell executor with Xcode command line tools.
+#                   macOS cannot run docker images, so this job is shell-only.
+#
+# ── Variables to set in the project (Settings → CI/CD → Variables) ────────────
+#   GITHUB_TOKEN    masked. Contents: write on the GitHub mirror repo — used for
+#                   both the source mirror and the release assets.
+#
+# Everything else (CI_JOB_TOKEN for the package registry and releases) is
+# provided by GitLab itself.
+
+stages:
+  - check
+  - build
+  - release
+  - mirror
+
+variables:
+  # A committed Cargo.lock plus a rev-pinned Crane means `--locked` builds are
+  # reproducible from this source alone — the point of building in CI at all.
+  CARGO_TERM_COLOR: "always"
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_RETRY: "3"
+  RUST_BACKTRACE: "1"
+  GITHUB_REPO: "Hahihula/CraneStudio"
+  # §12: build against an old glibc, or the binary won't run on Debian stable.
+  # Bullseye is glibc 2.31 (Debian 11 / Ubuntu 20.04 era) and still ships a
+  # current rustup toolchain.
+  RUST_IMAGE: "rust:1-bullseye"
+  # §12: no GPU on a build runner, so the compute capability can't be probed.
+  # 7.5 (Turing) is the baseline; newer cards JIT the PTX forward.
+  CUDA_COMPUTE_CAP: "75"
+
+# Cargo's registry and the build directory, keyed by the lockfile — a cache miss
+# costs ~15 minutes of candle/crane compilation, so this matters.
+.cargo_cache: &cargo_cache
+  key:
+    files:
+      - Cargo.lock
+  paths:
+    - .cargo/registry/index/
+    - .cargo/registry/cache/
+    - .cargo/git/db/
+    - target/
+
+.rust_setup: &rust_setup
+  - export CARGO_HOME="${CI_PROJECT_DIR}/.cargo"
+  - export PATH="${CARGO_HOME}/bin:${PATH}"
+  - |
+    if ! command -v cargo >/dev/null 2>&1; then
+      echo "no cargo on PATH — installing the pinned toolchain with rustup"
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --profile minimal --default-toolchain stable
+    fi
+  - rustc --version && cargo --version
+
+#############################################
+# Checks — PLAN.md §12: gating on every push
+#############################################
+
+check:fmt:
+  stage: check
+  image: ${RUST_IMAGE}
+  tags: [docker]
+  cache: *cargo_cache
+  before_script:
+    - *rust_setup
+    - rustup component add rustfmt
+  script:
+    - cargo fmt --all -- --check
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+# Unlike Crane's CI, clippy is **gating** here (§2.17), pedantic included.
+check:clippy:
+  stage: check
+  image: ${RUST_IMAGE}
+  tags: [docker]
+  cache: *cargo_cache
+  before_script:
+    - *rust_setup
+    - rustup component add clippy
+  script:
+    - cargo clippy --workspace --all-targets --locked -- -W clippy::pedantic -D warnings
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+check:test:
+  stage: check
+  image: ${RUST_IMAGE}
+  tags: [docker]
+  cache: *cargo_cache
+  before_script:
+    - *rust_setup
+  script:
+    # No GPU tests in CI (§12) — the suite is CPU-only by construction, and the
+    # TUI's own screens are covered by the TestBackend previews.
+    - cargo test --workspace --locked
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+# The catalog points at real HuggingFace repos pinned to real commits, and those
+# can be renamed, re-quantized in place or withdrawn by their owners. The
+# `--ignored` suite is where the network-dependent checks live — chiefly
+# `every_variant_is_still_downloadable_at_its_pinned_sha`, which HEADs every file
+# of every catalog variant and compares the total against the size the entry
+# promises. This is the job that finds out before a user does, so it wants a
+# schedule (Settings → CI/CD → Schedules; daily is plenty) and it does not gate
+# a push, because a HuggingFace outage is not a broken commit.
+check:catalog-live:
+  stage: check
+  image: ${RUST_IMAGE}
+  tags: [docker]
+  cache: *cargo_cache
+  before_script:
+    - *rust_setup
+  script:
+    - cargo test --workspace --locked -- --ignored
+  allow_failure: true
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_COMMIT_TAG
+
+#############################################
+# Builds — one per backend, because the GPU
+# backend is chosen at compile time (§2.5)
+#############################################
+
+# Shared packaging: name the archive the way §12 demands (the backend *must* be
+# in the filename — that confusion is what sinks first runs), record how it was
+# built, and publish the checksum next to it.
+.package: &package
+  - |
+    set -eu
+    # `CI_COMMIT_TAG` is not merely empty on a branch pipeline, it is *unset* —
+    # and this block runs under `set -u`. A branch build still produces a
+    # complete, installable archive; it just says so in its version.
+    VERSION="${CI_COMMIT_TAG:-}"
+    VERSION="${VERSION#v}"
+    if [ -z "${VERSION}" ]; then VERSION="0.0.0-${CI_COMMIT_SHORT_SHA}"; fi
+    NAME="cranestudio-${VERSION}-${ASSET_TARGET}-${ASSET_BACKEND}"
+    mkdir -p "dist/${NAME}"
+    cp target/release/cranestudio "dist/${NAME}/"
+    cp README.md "dist/${NAME}/" 2>/dev/null || true
+    # MIT requires the license text to travel with the binary.
+    cp LICENSE "dist/${NAME}/" 2>/dev/null || true
+    CRANE_REV=$(grep -m1 '^crane-serve = ' Cargo.toml | sed -n 's/.*rev = "\([^"]*\)".*/\1/p')
+    {
+      echo "CraneStudio ${VERSION}"
+      echo
+      echo "built-by      GitLab CI, ${CI_PROJECT_URL}/-/jobs/${CI_JOB_ID}"
+      echo "pipeline      ${CI_PIPELINE_URL}"
+      echo "source        ${CI_PROJECT_URL}/-/commit/${CI_COMMIT_SHA}"
+      echo "commit        ${CI_COMMIT_SHA}"
+      echo "tag           ${CI_COMMIT_TAG:-(untagged)}"
+      echo "built-at      $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      echo "target        ${ASSET_TARGET}"
+      echo "backend       ${ASSET_BACKEND}"
+      echo "features      ${CARGO_FEATURES:-(none, CPU build)}"
+      echo "rustc         $(rustc --version)"
+      echo "crane-serve   ${CRANE_REV}"
+      echo "runner        ${CI_RUNNER_DESCRIPTION:-unknown} (${CI_RUNNER_TAGS:-untagged})"
+      echo
+      echo "Reproduce this build:"
+      echo "  git clone ${CI_PROJECT_URL}.git && cd ${CI_PROJECT_NAME}"
+      echo "  git checkout ${CI_COMMIT_SHA}"
+      if [ -n "${CARGO_FEATURES:-}" ]; then
+        echo "  cargo build --release --locked --features ${CARGO_FEATURES}"
+      else
+        echo "  cargo build --release --locked"
+      fi
+    } > "dist/${NAME}/BUILD-PROVENANCE.txt"
+    tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
+    rm -rf "dist/${NAME}"
+    ( cd dist && sha256sum "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256" )
+    cat "dist/${NAME}.tar.gz.sha256"
+
+# A freshly built binary that can't even print a hardware report is not shippable
+# — and on the GPU runners this also proves the backend initialises against a
+# real driver, which is the failure §12 wants caught here rather than by a user.
+.smoke: &smoke
+  - ./target/release/cranestudio --version
+  - ./target/release/cranestudio doctor
+
+.build_rules: &build_rules
+  - if: $CI_COMMIT_TAG
+  - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    when: manual
+    allow_failure: true
+
+# The universal fallback (§13): always builds, runs anywhere, honest about being
+# slow. This is what a user with no GPU — or a broken driver — downloads.
+build:linux-cpu:
+  stage: build
+  image: ${RUST_IMAGE}
+  tags: [docker]
+  cache: *cargo_cache
+  variables:
+    ASSET_TARGET: "x86_64-linux"
+    ASSET_BACKEND: "cpu"
+  before_script:
+    - *rust_setup
+  script:
+    - cargo build --release --locked -p cranestudio
+    - *smoke
+    - *package
+  artifacts:
+    name: "cranestudio-x86_64-linux-cpu"
+    paths:
+      - dist/
+    expire_in: 1 month
+  rules: *build_rules
+
+build:linux-cuda:
+  stage: build
+  # A CUDA *toolkit* image, not a runtime one: cudarc's build script shells out
+  # to nvcc to learn the CUDA version (`cuda-version-from-build-system`).
+  image: nvidia/cuda:12.6.3-devel-ubuntu22.04
+  tags: [cuda]
+  cache: *cargo_cache
+  variables:
+    ASSET_TARGET: "x86_64-linux"
+    ASSET_BACKEND: "cuda"
+    CARGO_FEATURES: "cuda"
+  before_script:
+    - |
+      if [ -z "${CRANESTUDIO_SHELL_RUNNER:-}" ]; then
+        apt-get update -qq
+        apt-get install -y -qq --no-install-recommends curl git ca-certificates build-essential pkg-config libssl-dev
+      fi
+    - *rust_setup
+    - nvcc --version
+  script:
+    - cargo build --release --locked -p cranestudio --features cuda
+    # Ships against the user's own NVIDIA driver, so the link is dynamic and
+    # that is expected (§12). Print what it actually needs, so a "missing
+    # libcuda" report from a user can be checked against this log.
+    - ldd target/release/cranestudio | grep -Ei "cuda|nvidia" || true
+    - *smoke
+    - *package
+  artifacts:
+    name: "cranestudio-x86_64-linux-cuda"
+    paths:
+      - dist/
+    expire_in: 1 month
+  rules: *build_rules
+
+build:macos-metal:
+  stage: build
+  # macOS runners are shell executors — no image, and the toolchain lives on the
+  # host. `.rust_setup` installs rustup on first use and reuses it after.
+  tags: [macos, metal]
+  cache: *cargo_cache
+  variables:
+    ASSET_TARGET: "aarch64-macos"
+    ASSET_BACKEND: "metal"
+    CARGO_FEATURES: "metal,accelerate"
+  before_script:
+    - *rust_setup
+  script:
+    - cargo build --release --locked -p cranestudio --features metal,accelerate
+    - *smoke
+    - *package
+  artifacts:
+    name: "cranestudio-aarch64-macos-metal"
+    paths:
+      - dist/
+    expire_in: 1 month
+  rules: *build_rules
+
+#############################################
+# Release — GitLab first, then the same
+# artifacts onto the GitHub mirror
+#############################################
+
+# Uploads every archive to the generic package registry (job artifacts expire;
+# release assets must not) and creates the GitLab release pointing at them.
+release:gitlab:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  tags: [docker]
+  needs:
+    - job: build:linux-cpu
+      artifacts: true
+    - job: build:linux-cuda
+      artifacts: true
+      optional: true
+    - job: build:macos-metal
+      artifacts: true
+      optional: true
+  variables:
+    GIT_STRATEGY: none
+  script:
+    - apk add --no-cache curl
+    - |
+      set -eu
+      VERSION="${CI_COMMIT_TAG#v}"
+      BASE="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/cranestudio/${VERSION}"
+      ASSET_ARGS=""
+      : > release-notes.md
+      {
+        echo "Binaries below are built by [this pipeline](${CI_PIPELINE_URL}) from"
+        echo "\`${CI_COMMIT_SHA}\` — nothing is uploaded by hand. Each archive contains a"
+        echo "\`BUILD-PROVENANCE.txt\` with the exact commit, toolchain and Crane revision,"
+        echo "and every archive is published with its SHA-256."
+        echo
+        echo "| download | for |"
+        echo "|---|---|"
+        echo "| \`…-x86_64-linux-cuda.tar.gz\` | Linux with an NVIDIA GPU (driver 525+) |"
+        echo "| \`…-aarch64-macos-metal.tar.gz\` | Apple Silicon Macs |"
+        echo "| \`…-x86_64-linux-cpu.tar.gz\` | anything else — works everywhere, slow on big models |"
+        echo
+        echo "Unsure? Take the CPU build and run \`cranestudio doctor\`: it reports what the"
+        echo "machine has and warns when a GPU build would find no GPU."
+        echo
+        echo '```sh'
+        echo "tar xzf cranestudio-${VERSION}-x86_64-linux-cuda.tar.gz"
+        echo "cd cranestudio-${VERSION}-x86_64-linux-cuda && ./cranestudio"
+        echo '```'
+        echo
+        echo "### Checksums"
+        echo '```'
+      } >> release-notes.md
+      for archive in dist/*.tar.gz; do
+        name=$(basename "${archive}")
+        echo "uploading ${name}"
+        curl --fail-with-body --silent --show-error \
+          --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+          --upload-file "${archive}" "${BASE}/${name}"
+        cat "${archive}.sha256" >> release-notes.md
+        ASSET_ARGS="${ASSET_ARGS} --assets-link {\"name\":\"${name}\",\"url\":\"${BASE}/${name}\",\"link_type\":\"package\"}"
+      done
+      echo '```' >> release-notes.md
+      echo "${ASSET_ARGS}" > asset-args.txt
+      cat release-notes.md
+    - |
+      set -eu
+      # shellcheck disable=SC2046  # the asset flags must word-split
+      release-cli create \
+        --name "CraneStudio ${CI_COMMIT_TAG}" \
+        --tag-name "${CI_COMMIT_TAG}" \
+        --description release-notes.md \
+        $(cat asset-args.txt)
+  artifacts:
+    paths:
+      - dist/
+      - release-notes.md
+    expire_in: 1 year
+  rules:
+    - if: $CI_COMMIT_TAG
+
+# The mirror is where most people will land, so the binaries have to be there
+# too — a GitHub release with the identical archives from the identical build.
+release:github:
+  stage: release
+  image: alpine:latest
+  tags: [docker]
+  needs:
+    - job: release:gitlab
+      artifacts: true
+  variables:
+    GIT_STRATEGY: none
+  before_script:
+    - apk add --no-cache curl jq
+  script:
+    - |
+      set -eu
+      if [ -z "${GITHUB_TOKEN:-}" ]; then
+        echo "ERROR: GITHUB_TOKEN is not set — cannot publish the mirror release"
+        exit 1
+      fi
+      API="https://api.github.com/repos/${GITHUB_REPO}"
+      NOTES=$(jq -Rs . < release-notes.md)
+      # The mirror push (next stage) may not have delivered this tag yet on a
+      # first release; GitHub creates it from the target commit if missing.
+      BODY="{\"tag_name\":\"${CI_COMMIT_TAG}\",\"target_commitish\":\"${CI_COMMIT_SHA}\",\"name\":\"CraneStudio ${CI_COMMIT_TAG}\",\"body\":${NOTES}}"
+      EXISTING=$(curl -sS -H "Authorization: Bearer ${GITHUB_TOKEN}" "${API}/releases/tags/${CI_COMMIT_TAG}" | jq -r '.id // empty')
+      if [ -n "${EXISTING}" ]; then
+        echo "updating existing GitHub release ${EXISTING}"
+        RELEASE_ID="${EXISTING}"
+        curl -sS --fail-with-body -X PATCH \
+          -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+          -H "Content-Type: application/json" \
+          -d "${BODY}" "${API}/releases/${RELEASE_ID}" > /dev/null
+      else
+        RELEASE_ID=$(curl -sS --fail-with-body -X POST \
+          -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+          -H "Content-Type: application/json" \
+          -d "${BODY}" "${API}/releases" | jq -r '.id')
+        echo "created GitHub release ${RELEASE_ID}"
+      fi
+      for asset in dist/*.tar.gz dist/*.sha256; do
+        name=$(basename "${asset}")
+        echo "uploading ${name} to GitHub"
+        # Replace an existing asset of the same name, so a re-run is idempotent.
+        OLD=$(curl -sS -H "Authorization: Bearer ${GITHUB_TOKEN}" "${API}/releases/${RELEASE_ID}/assets" \
+          | jq -r ".[] | select(.name == \"${name}\") | .id")
+        if [ -n "${OLD}" ]; then
+          curl -sS -X DELETE -H "Authorization: Bearer ${GITHUB_TOKEN}" "${API}/releases/assets/${OLD}" > /dev/null
+        fi
+        curl -sS --fail-with-body -X POST \
+          -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+          -H "Content-Type: application/octet-stream" \
+          --data-binary "@${asset}" \
+          "https://uploads.github.com/repos/${GITHUB_REPO}/releases/${RELEASE_ID}/assets?name=${name}" > /dev/null
+      done
+      echo "https://github.com/${GITHUB_REPO}/releases/tag/${CI_COMMIT_TAG}"
+  rules:
+    - if: $CI_COMMIT_TAG
+
+#############################################
+# GitHub Mirror
+#############################################
+
+mirror:github:
+  stage: mirror
+  image: alpine:latest
+  tags: [docker]
+  before_script:
+    - apk add --no-cache git bash
+  variables:
+    GIT_STRATEGY: clone
+    GIT_DEPTH: 0
+  script:
+    - git config --global user.name "GitLab CI"
+    - git config --global user.email "ci@gitlab.com"
+
+    - |
+      if [ -z "$GITHUB_TOKEN" ]; then
+        echo "ERROR: GITHUB_TOKEN is not set!"
+        exit 1
+      else
+        echo "GITHUB_TOKEN is set (length: ${#GITHUB_TOKEN})"
+      fi
+
+    - |
+      echo "Setting up GitHub remote..."
+      git remote add github "https://${GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git" || \
+      git remote set-url github "https://${GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git"
+
+    - git fetch --all
+
+    - |
+      if [ "$CI_COMMIT_TAG" != "" ]; then
+        echo "Processing tag: $CI_COMMIT_TAG"
+        git push "https://${GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git" "refs/tags/$CI_COMMIT_TAG:refs/tags/$CI_COMMIT_TAG" --force
+      else
+        echo "Processing branch: $CI_COMMIT_REF_NAME"
+        git checkout -B $CI_COMMIT_REF_NAME
+
+        if [ -f README.md ]; then
+          cp README.md README.md.original
+        fi
+
+        # The mirror's README leads with where the project actually lives — and,
+        # since most people arrive here looking for a download, with where the
+        # binaries are.
+        echo "# 🪞 GitHub Mirror" > README.md
+        echo "" >> README.md
+        echo "[![GitLab](https://img.shields.io/badge/Primary%20Repo-GitLab-orange?style=for-the-badge&logo=gitlab)](${CI_PROJECT_URL})" >> README.md
+        echo "" >> README.md
+        echo "> **⚠️ Important Notice**: This repository is a **read-only mirror** of the primary repository hosted on GitLab." >> README.md
+        echo "" >> README.md
+        echo "- **Primary Repository**: [${CI_PROJECT_URL}](${CI_PROJECT_URL})" >> README.md
+        echo "- **Submit Issues**: [GitLab Issues](${CI_PROJECT_URL}/-/issues)" >> README.md
+        echo "- **Submit PRs**: [GitLab Merge Requests](${CI_PROJECT_URL}/-/merge_requests)" >> README.md
+        echo "- **Download a binary**: [GitHub Releases](https://github.com/${GITHUB_REPO}/releases) — the same archives this pipeline builds, or [GitLab Releases](${CI_PROJECT_URL}/-/releases)" >> README.md
+        echo "" >> README.md
+        echo "All development, issue tracking, and pull requests should be done on the GitLab repository." >> README.md
+        echo "" >> README.md
+        echo "---" >> README.md
+        echo "" >> README.md
+        echo "# Original README" >> README.md
+        echo "" >> README.md
+
+        if [ -f README.md.original ]; then
+          cat README.md.original >> README.md
+          rm README.md.original
+        fi
+
+        git add README.md
+        git commit -m "Update README for GitHub mirror [skip ci]" || true
+        git push "https://${GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git" "$CI_COMMIT_REF_NAME" --force
+      fi
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH

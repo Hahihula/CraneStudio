@@ -33,6 +33,35 @@ pure Rust — no llama.cpp).
 
 ---
 
+## Download
+
+No toolchain, no Python, no install — one binary. Grab it from
+**[Releases](../../releases)** (the GitHub mirror carries the same archives):
+
+| Archive | For |
+| --- | --- |
+| `cranestudio-<version>-x86_64-linux-cuda.tar.gz` | Linux with an NVIDIA GPU (driver 525 or newer) |
+| `cranestudio-<version>-aarch64-macos-metal.tar.gz` | Apple Silicon Macs |
+| `cranestudio-<version>-x86_64-linux-cpu.tar.gz` | anything else — runs everywhere, slow on big models |
+
+```sh
+tar xzf cranestudio-*-x86_64-linux-cuda.tar.gz
+cd cranestudio-*-x86_64-linux-cuda
+./cranestudio doctor     # what does this machine have?
+./cranestudio            # run it
+```
+
+Not sure which one? Take the CPU archive and run `./cranestudio doctor` — it
+prints the GPU, VRAM, driver and disk it found, and says so plainly when a GPU
+build would find no GPU.
+
+Every archive is built by the pipeline from the tagged commit — never uploaded by
+hand — and ships with its SHA-256 plus a `BUILD-PROVENANCE.txt` naming the
+commit, the Rust version, the pinned Crane revision and the job that produced it,
+so you can rebuild the same binary yourself (see [Building](#building)).
+
+---
+
 ## Quick start
 
 ```sh
@@ -193,22 +222,18 @@ forward to the next free one automatically.
 Rust stable (`rust-toolchain.toml` pins the channel), edition 2024.
 
 ```sh
-cargo build --release                      # CPU
-cargo build --release --features cuda      # NVIDIA
-cargo build --release --features metal     # Apple Silicon
+cargo build --release --locked                      # CPU
+cargo build --release --locked --features cuda      # NVIDIA
+cargo build --release --locked --features metal     # Apple Silicon
 ```
 
 Other passthrough features: `rocm`, `cudnn`, `mkl`, `accelerate`. The GPU backend
 is a **compile-time** choice — one binary per backend, and `cranestudio doctor`
 warns when a GPU build finds no GPU.
 
-> **Note for a fresh clone:** the workspace `Cargo.toml` currently carries a
-> temporary `[patch]` section pointing `crane-serve`/`crane-core` at a local
-> checkout (`/home/hahihula/mywork/crane-local-patched`) while a small
-> candle-compatibility fix is pending upstream. Until that patch lands, either
-> clone the patched Crane branch to that path or point the `[patch]` entries at
-> your own checkout. Removing this section is a v1 release gate (PLAN.md §3.4,
-> §11.0).
+`crane-serve` is pinned to a specific Crane revision in the workspace
+`Cargo.toml`, so a plain clone builds without any local checkout. `--locked` is
+what the release pipeline uses: same source, same lockfile, same binary.
 
 ---
 
@@ -271,13 +296,47 @@ worth eyeballing.
   Crane's source or a live model, say so.
 - Adding a catalog model is meant to be a pure data change to
   [`catalog/models.ron`](catalog/models.ron) — and every entry there has actually
-  been downloaded, launched and exercised against a real request. Keep that bar.
+  been downloaded, launched and exercised against a real request. Keep that bar;
+  entries still awaiting that last step say `PENDING LAUNCH CHECK` so they can be
+  found with one grep.
 
 ```sh
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -W clippy::pedantic
 cargo test --workspace
 ```
+
+The same three commands gate every push in CI. Two suites are *not* run there:
+GPU tests (there is no GPU on a check runner) and the network-dependent
+`--ignored` tests, which run on a schedule instead —
+`every_variant_is_still_downloadable_at_its_pinned_sha` HEADs every file of every
+catalog entry and fails when HuggingFace stops serving what the catalog promises.
+
+### Releases
+
+[`.gitlab-ci.yml`](.gitlab-ci.yml) is the whole release process, and the only
+thing that ever produces a published binary. Tag a commit and the pipeline
+builds one archive per backend, publishes them with checksums to GitLab
+Releases, then mirrors the source *and* the identical archives to GitHub
+Releases.
+
+```sh
+git tag -a v0.1.0 -m "CraneStudio 0.1.0" && git push origin v0.1.0
+```
+
+Because the backend is chosen at compile time, each one needs its own runner —
+register them with the tags the pipeline expects:
+
+| Tag(s) | Runner | Builds |
+| --- | --- | --- |
+| `docker` | any Linux docker executor | checks, CPU archive, releases, mirror |
+| `cuda` | Linux + NVIDIA GPU with the CUDA toolkit (`nvcc`) | CUDA archive |
+| `macos`, `metal` | Apple Silicon, shell executor with Xcode CLT | Metal archive |
+
+Set `GITHUB_TOKEN` (masked, `contents: write` on the mirror) in the project's
+CI/CD variables; everything else uses GitLab's own job token. A shell runner that
+already has CUDA and rustup can set `CRANESTUDIO_SHELL_RUNNER=1` to skip the
+job's own toolchain setup.
 
 ### License
 

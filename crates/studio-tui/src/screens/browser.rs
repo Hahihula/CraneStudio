@@ -348,7 +348,10 @@ fn render_catalog(app: &mut App, frame: &mut Frame, area: Rect) {
 fn catalog_detail(model: &studio_core::catalog::schema::ModelEntry) -> String {
     use studio_core::catalog::schema::Capability;
 
-    let mut parts = vec![model.model_type.clone(), context_label(model.native_context)];
+    let mut parts = vec![
+        model.model_type.clone(),
+        context_label(model.native_context),
+    ];
 
     let mut abilities = Vec::new();
     if model.capabilities.contains(&Capability::Tools) {
@@ -376,7 +379,7 @@ fn catalog_detail(model: &studio_core::catalog::schema::ModelEntry) -> String {
 /// `262144` → `256k ctx`, so a row can carry the number that decides whether a
 /// model is worth downloading without spending 6 columns on digits.
 fn context_label(context: usize) -> String {
-    if context >= 1024 && context % 1024 == 0 {
+    if context >= 1024 && context.is_multiple_of(1024) {
         format!("{}k ctx", context / 1024)
     } else {
         format!("{context} ctx")

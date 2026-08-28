@@ -22,9 +22,29 @@ const MAX_DEPTH: usize = 6;
 
 /// `root` need not exist — an absent or unreadable directory just yields no
 /// candidates, matching §6's "never fail to start" spirit.
+///
+/// `root` itself counts as a candidate when it *is* a checkpoint (a directory
+/// holding `config.json`, or a single `.gguf` file). Without that, scanning a
+/// model directory directly — `cranestudio catalog scan ~/models/some-model`,
+/// or the post-download classification of a safetensors repo, whose destination
+/// directory is exactly the checkpoint — reported "no local models found" for a
+/// model that was plainly right there.
 #[must_use]
 pub fn scan(root: &Path) -> Vec<LocalCandidate> {
     let mut out = Vec::new();
+    if root.is_file() {
+        if root
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("gguf"))
+        {
+            out.push(classify_gguf_file(root));
+        }
+        return out;
+    }
+    if root.join("config.json").is_file() {
+        out.push(classify_safetensors_dir(root));
+        return out;
+    }
     walk(root, 0, &mut out);
     out
 }
@@ -174,6 +194,46 @@ mod tests {
         fs::write(nested.join("config.json"), r#"{"model_type": "qwen25"}"#).unwrap();
 
         assert_eq!(scan(root.path()).len(), 1);
+    }
+
+    /// Scanning a checkpoint directly is what `cranestudio catalog scan <dir>`
+    /// and the post-download classification of a safetensors repo both do, and
+    /// both used to come back empty-handed.
+    #[test]
+    fn the_scan_root_can_itself_be_the_checkpoint() {
+        let root = TempDir::new().unwrap();
+        fs::write(
+            root.path().join("config.json"),
+            r#"{"model_type": "qwen3"}"#,
+        )
+        .unwrap();
+        fs::write(root.path().join("model.safetensors"), b"weights").unwrap();
+
+        let candidates = scan(root.path());
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].path, root.path());
+        assert_eq!(candidates[0].format, Format::Safetensors);
+    }
+
+    #[test]
+    fn a_scan_root_that_is_a_single_gguf_file_is_still_one_candidate() {
+        let root = TempDir::new().unwrap();
+        let path = root.path().join("model.gguf");
+        fs::write(&path, b"not really a gguf").unwrap();
+
+        let candidates = scan(&path);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].path, path);
+        assert_eq!(candidates[0].format, Format::Gguf);
+    }
+
+    #[test]
+    fn a_scan_root_that_is_an_unrelated_file_yields_nothing() {
+        let root = TempDir::new().unwrap();
+        let path = root.path().join("notes.txt");
+        fs::write(&path, b"hello").unwrap();
+
+        assert!(scan(&path).is_empty());
     }
 
     #[test]

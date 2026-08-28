@@ -258,13 +258,6 @@ fn control_base_url() -> String {
     )
 }
 
-fn gateway_base_url() -> String {
-    format!(
-        "http://127.0.0.1:{}",
-        studio_core::endpoints::resolve_gateway_port(studio_gateway::DEFAULT_GATEWAY_PORT)
-    )
-}
-
 const MAX_PORT_ATTEMPTS: u16 = 20;
 
 /// Binds `preferred`, or the next free port after it (up to `max_tries`
@@ -360,12 +353,28 @@ fn build_launch_spec(
     }
 }
 
+/// Reaches the daemon, starting one if none is listening — the same
+/// `connect_or_spawn` the TUI uses, so `cranestudio launch` behaves the way its
+/// help text says it does instead of failing with a connection error on a clean
+/// machine. Deliberately does *not* attach: the detach lease's grace-period
+/// shutdown only fires when an attached client disconnects (§3.1a), so a
+/// one-shot CLI launch leaves the model serving after the command exits, which
+/// is the whole point of launching from a script.
+async fn connect_or_spawn_daemon() -> anyhow::Result<studio_tui::daemon_client::DaemonClient> {
+    studio_tui::daemon_client::DaemonClient::connect_or_spawn(
+        preferred_control_port(),
+        preferred_gateway_port(),
+    )
+    .await
+}
+
 async fn run_launch(
     model_path: String,
     model_type: String,
     port: Option<u16>,
     max_seq_len: usize,
 ) -> anyhow::Result<()> {
+    let daemon = connect_or_spawn_daemon().await?;
     let client = reqwest::Client::new();
     // An explicit --port is a deliberate choice, honored as-is; without one,
     // pick a free port automatically rather than hard-coding 41100 (§7.4).
@@ -373,7 +382,10 @@ async fn run_launch(
     let spec = build_launch_spec(model_path, model_type, port, max_seq_len);
 
     let response = client
-        .post(format!("{}/control/launch", control_base_url()))
+        .post(format!(
+            "http://127.0.0.1:{}/control/launch",
+            daemon.control_port()
+        ))
         .json(&serde_json::json!({ "spec": spec, "label": format!("port-{port}") }))
         .send()
         .await?;
@@ -399,11 +411,15 @@ async fn run_register(
     port: u16,
     max_seq_len: usize,
 ) -> anyhow::Result<()> {
+    let daemon = connect_or_spawn_daemon().await?;
     let client = reqwest::Client::new();
     let spec = build_launch_spec(model_path, model_type, port, max_seq_len);
 
     let response = client
-        .post(format!("{}/register", gateway_base_url()))
+        .post(format!(
+            "http://127.0.0.1:{}/register",
+            daemon.gateway_port()
+        ))
         .json(&serde_json::json!({ "name": name.clone(), "spec": spec }))
         .send()
         .await?;

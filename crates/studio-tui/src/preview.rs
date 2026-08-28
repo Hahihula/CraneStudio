@@ -345,6 +345,11 @@ fn preview_browser() {
     );
     show("get models — catalog", 120, 30, &mut app);
 
+    // The vision entries live at the end of the list, so the tail is worth a
+    // look of its own: it's where the catalog's widest detail lines are.
+    app.browser.selected = 17;
+    show("get models — catalog tail", 120, 30, &mut app);
+
     app.browser.tab = screens::browser::Tab::Search;
     app.browser.search_query = "qwen3.5 gguf".to_string();
     app.browser.searching = true;

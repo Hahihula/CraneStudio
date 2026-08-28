@@ -358,8 +358,13 @@
                     format: Safetensors,
                     quant: None,
                     download_bytes: 1519182365,
-                    // PENDING LAUNCH CHECK — the smallest entry in the
-                    // catalog, and therefore the cheapest one to verify.
+                    // Launch-verified: downloaded at this sha, classified as
+                    // `qwen3` by the local scan, launched through the daemon on
+                    // a CPU-only build and answered a real chat completion
+                    // (15 prompt tokens in, tokens out). No `measured` entry
+                    // because that was an unoptimized debug build on CPU —
+                    // a throughput or peak-memory number from it would be a
+                    // lie, and §7.3 only wants numbers that mean something.
                     measured: {},
                 ),
             ],

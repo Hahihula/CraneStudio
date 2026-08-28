@@ -223,6 +223,16 @@ checksum = "f93ebbf82d06013f4c41fe71303feb980cddd78496d904d06be627972de51a24"
 
 [[package]]
 name = "audioadapter"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "91f87b70b051c5866680ad79f6743a42ccab264c009d1a71f4d33a3872ae60c8"
+dependencies = [
+ "audio-core",
+ "num-traits",
+]
+
+[[package]]
+name = "audioadapter"
 version = "4.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c75c3943c6c7279bb25a449a8d1727480730ab2efd7b6fd5d6ca51927096e6e4"
@@ -233,12 +243,33 @@ dependencies = [
 
 [[package]]
 name = "audioadapter-buffers"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9097d67933fb083d382ce980430afdb758aada60846010aee6be068c06cef0ca"
+dependencies = [
+ "audioadapter 3.0.0",
+ "audioadapter-sample 3.0.0",
+ "num-traits",
+]
+
+[[package]]
+name = "audioadapter-buffers"
 version = "4.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ece3390b6eb40379094843a1da5aaccc34bc0d85a8cbf68d09fe092fee6de29e"
 dependencies = [
- "audioadapter",
- "audioadapter-sample",
+ "audioadapter 4.0.0",
+ "audioadapter-sample 4.0.0",
+ "num-traits",
+]
+
+[[package]]
+name = "audioadapter-sample"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34ab94f2bc04a14e1f49ee5f222f66460e8a1b51627bdfedf34eed394d747938"
+dependencies = [
+ "audio-core",
  "num-traits",
 ]
 
@@ -1009,9 +1040,10 @@ dependencies = [
 [[package]]
 name = "crane"
 version = "0.1.0"
+source = "git+https://github.com/Hahihula/Crane?rev=41b70560e6f71962876b508b0d6bd92b1beb8365#41b70560e6f71962876b508b0d6bd92b1beb8365"
 dependencies = [
  "anyhow",
- "audioadapter-buffers",
+ "audioadapter-buffers 4.0.0",
  "candle-core",
  "colored",
  "crane-core",
@@ -1029,6 +1061,7 @@ dependencies = [
 [[package]]
 name = "crane-core"
 version = "0.1.0"
+source = "git+https://github.com/Hahihula/Crane?rev=41b70560e6f71962876b508b0d6bd92b1beb8365#41b70560e6f71962876b508b0d6bd92b1beb8365"
 dependencies = [
  "accelerate-src",
  "ahash",
@@ -1059,6 +1092,7 @@ dependencies = [
 [[package]]
 name = "crane-serve"
 version = "0.1.0"
+source = "git+https://github.com/Hahihula/Crane?rev=41b70560e6f71962876b508b0d6bd92b1beb8365#41b70560e6f71962876b508b0d6bd92b1beb8365"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4730,14 +4764,18 @@ dependencies = [
 
 [[package]]
 name = "rubato"
-version = "0.16.2"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5258099699851cfd0082aeb645feb9c084d9a5e1f1b8d5372086b989fc5e56a1"
+checksum = "d4be9c88e3d722d3d36939e41941f6b6f52810c1235bf19998a7d4535b402892"
 dependencies = [
+ "audioadapter 3.0.0",
+ "audioadapter-buffers 3.0.0",
  "num-complex",
  "num-integer",
  "num-traits",
  "realfft",
+ "visibility",
+ "windowfunctions",
 ]
 
 [[package]]
@@ -4746,8 +4784,8 @@ version = "4.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f57c655d11e929f05a8663b323ff553f8d9773be05dfdc087795955bedeb8d92"
 dependencies = [
- "audioadapter",
- "audioadapter-buffers",
+ "audioadapter 4.0.0",
+ "audioadapter-buffers 4.0.0",
  "num-complex",
  "num-integer",
  "num-traits",
@@ -5494,9 +5532,9 @@ dependencies = [
 
 [[package]]
 name = "tekken-rs"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "49623843103837f53f7ebe8cfafc19ccff28ff0e15e7c4b9f6ad21e36fbfde3a"
+checksum = "5ca0370459b347364f95683575afc18fe0aa6fc32a082de65fca5a229ce098be"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -5505,7 +5543,7 @@ dependencies = [
  "log",
  "ndarray",
  "regex",
- "rubato 0.16.2",
+ "rubato 3.0.0",
  "rustc-hash 1.1.0",
  "rustfft",
  "serde",
@@ -5668,9 +5706,9 @@ dependencies = [
 
 [[package]]
 name = "tiktoken-rs"
-version = "0.7.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25563eeba904d770acf527e8b370fe9a5547bacd20ff84a0b6c3bc41288e5625"
+checksum = "3a19830747d9034cd9da43a60eaa8e552dfda7712424aebf187b7a60126bae0d"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

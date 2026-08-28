@@ -84,6 +84,12 @@ mod tests {
     use crate::catalog::schema::{Capability, Format};
     use crate::estimator::CONTEXT_FLOOR;
 
+    fn has_extension(file: &str, extension: &str) -> bool {
+        std::path::Path::new(file)
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case(extension))
+    }
+
     #[test]
     fn bundled_catalog_parses_and_is_non_empty() {
         let catalog = bundled();
@@ -113,7 +119,11 @@ mod tests {
         let mut model_ids = HashSet::new();
         let mut variant_ids = HashSet::new();
         for model in &catalog.models {
-            assert!(model_ids.insert(&model.id), "duplicate model id {}", model.id);
+            assert!(
+                model_ids.insert(&model.id),
+                "duplicate model id {}",
+                model.id
+            );
             for variant in &model.variants {
                 assert!(
                     variant_ids.insert(&variant.id),
@@ -152,7 +162,11 @@ mod tests {
     #[test]
     fn no_entry_claims_kv_swap() {
         for model in bundled().models {
-            assert!(!model.supports.kv_swap, "{}: kv_swap must be false", model.id);
+            assert!(
+                !model.supports.kv_swap,
+                "{}: kv_swap must be false",
+                model.id
+            );
         }
     }
 
@@ -226,7 +240,7 @@ mod tests {
                         let ggufs: Vec<_> = variant
                             .files
                             .iter()
-                            .filter(|f| f.ends_with(".gguf"))
+                            .filter(|f| has_extension(f, "gguf"))
                             .collect();
                         assert_eq!(
                             ggufs.len(),
@@ -250,7 +264,10 @@ mod tests {
                             );
                         }
                         assert!(
-                            variant.files.iter().any(|f| f.ends_with(".safetensors")),
+                            variant
+                                .files
+                                .iter()
+                                .any(|f| has_extension(f, "safetensors")),
                             "{}: safetensors variants must include weights",
                             variant.id
                         );
@@ -310,5 +327,71 @@ mod tests {
         std::fs::remove_file(cache.path()).unwrap();
         let (catalog, _source) = load(DEFAULT_REMOTE_URL, cache.path()).await;
         assert!(!catalog.models.is_empty());
+    }
+
+    /// The one way a "data-only" catalog entry rots: a repo owner renames a
+    /// file, re-quantizes it in place, or takes the repo down. Everything the
+    /// catalog claims about a download is checkable without downloading it —
+    /// the file exists at the pinned sha, and its size is exactly what the
+    /// entry says — so check all of it, and let CI do so on a schedule (§12).
+    ///
+    /// Sizes are compared as the sum over a variant's whole file list, which is
+    /// what `download_bytes` means and what the progress bar divides by.
+    #[tokio::test]
+    #[ignore = "hits the real HuggingFace API — not run by default (§12)"]
+    async fn every_variant_is_still_downloadable_at_its_pinned_sha() {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .unwrap();
+        let mut problems = Vec::new();
+
+        for model in bundled().models {
+            for variant in &model.variants {
+                let mut total = 0u64;
+                for file in &variant.files {
+                    let url = format!(
+                        "https://huggingface.co/{}/resolve/{}/{file}",
+                        variant.repo, variant.revision
+                    );
+                    match client.head(&url).send().await {
+                        Ok(response) if response.status().is_success() => {
+                            // LFS files answer with the real size in
+                            // `x-linked-size` before the redirect, and with a
+                            // plain `content-length` from the CDN after it.
+                            let size = response
+                                .headers()
+                                .get("x-linked-size")
+                                .and_then(|v| v.to_str().ok())
+                                .and_then(|v| v.parse::<u64>().ok())
+                                .or_else(|| response.content_length());
+                            match size {
+                                Some(size) => total += size,
+                                None => problems
+                                    .push(format!("{}: {file}: no size reported", variant.id)),
+                            }
+                        }
+                        Ok(response) => problems.push(format!(
+                            "{}: {file}: HTTP {}",
+                            variant.id,
+                            response.status()
+                        )),
+                        Err(e) => problems.push(format!("{}: {file}: {e}", variant.id)),
+                    }
+                }
+                if total != variant.download_bytes {
+                    problems.push(format!(
+                        "{}: download_bytes says {} but the files add up to {total}",
+                        variant.id, variant.download_bytes
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            problems.is_empty(),
+            "the catalog no longer matches what HuggingFace serves:\n  {}",
+            problems.join("\n  ")
+        );
     }
 }

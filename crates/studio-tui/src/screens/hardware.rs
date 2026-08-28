@@ -293,7 +293,7 @@ fn gpu_lines(app: &App, width: u16) -> Vec<Line<'static>> {
         if matches!(hw.backend, Backend::Cuda | Backend::Metal | Backend::Rocm) {
             for row in crate::ui::text::wrap(
                 &format!(
-                    "this build expects a {} GPU but none was found — inference falls back to the CPU and will be very slow",
+                    "this build expects a {} GPU but none was found — inference falls back to the CPU and will be very slow. Check the driver, or download the CPU build, which is meant for exactly this case.",
                     backend_label(hw.backend)
                 ),
                 width,

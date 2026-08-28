@@ -40,7 +40,7 @@ fn render_gpus(report: &HardwareReport, out: &mut String) {
         ) {
             let _ = writeln!(
                 out,
-                "  \u{26a0} this build expects a {} GPU but none was found — inference will fall back to CPU and be very slow",
+                "  \u{26a0} this build expects a {} GPU but none was found — inference will fall back to the CPU and be very slow.\n     Check the driver, or download the CPU build, which is meant for exactly this case.",
                 backend_label(report.backend)
             );
         }

@@ -4,7 +4,7 @@
 
 pub mod app;
 pub mod catalog;
-mod daemon_client;
+pub mod daemon_client;
 pub mod doctor;
 pub mod download;
 mod fmt;
