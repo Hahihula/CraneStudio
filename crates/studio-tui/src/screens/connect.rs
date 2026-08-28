@@ -4,9 +4,9 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Wrap};
 
 use crate::app::App;
 use crate::daemon_client::ChildState;
@@ -39,7 +39,9 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             "Server running",
-            Style::new().fg(Color::Green).add_modifier(Modifier::BOLD),
+            Style::new()
+                .fg(app.theme.success)
+                .add_modifier(Modifier::BOLD),
         ))),
         header,
     );
@@ -50,16 +52,28 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         .and_then(|id| app.last_running.iter().find(|c| c.info.id == id))
         .map(|c| &c.state);
 
-    let status_line = match state {
-        Some(ChildState::Healthy) => "\u{25cf} healthy — ready for requests",
-        Some(ChildState::Starting) => "\u{25cb} starting — loading the model onto the GPU…",
-        Some(ChildState::Exited { .. }) => "\u{2715} exited — check the daemon log",
-        _ => "? status unknown",
+    let (status_text, status_color) = match state {
+        Some(ChildState::Healthy) => (
+            "\u{25cf} healthy — ready for requests".to_string(),
+            app.theme.success,
+        ),
+        Some(ChildState::Starting) => (
+            format!(
+                "{} starting — loading the model onto the GPU…",
+                crate::theme::spinner(app.tick)
+            ),
+            app.theme.warning,
+        ),
+        Some(ChildState::Exited { .. }) => (
+            "\u{2715} exited — check the daemon log".to_string(),
+            app.theme.error,
+        ),
+        _ => ("? status unknown".to_string(), app.theme.muted),
     };
 
     let base_url = format!("http://127.0.0.1:{}/v1", app.connect.gateway_port);
     let lines = vec![
-        Line::from(status_line),
+        Line::from(Span::styled(status_text, Style::new().fg(status_color))),
         Line::raw(""),
         Line::from(format!("Model: {}", app.connect.name)),
         Line::from(format!("Base URL (never changes when you switch models): {base_url}")),
@@ -71,12 +85,13 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     frame.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
-            .block(Block::bordered()),
+            .block(app.theme.block("")),
         body,
     );
 
     frame.render_widget(
-        Paragraph::new("[r] open chat playground   [h] home   [q] quit"),
+        Paragraph::new("[r] open chat playground   [h] home   [F2] theme   [q] quit")
+            .style(app.theme.muted_style()),
         footer,
     );
 }

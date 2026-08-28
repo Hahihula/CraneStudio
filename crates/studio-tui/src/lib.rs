@@ -8,3 +8,4 @@ pub mod doctor;
 pub mod download;
 mod fmt;
 mod screens;
+pub mod theme;

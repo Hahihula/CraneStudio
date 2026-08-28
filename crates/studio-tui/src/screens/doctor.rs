@@ -3,7 +3,7 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout};
-use ratatui::widgets::{Block, Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Wrap};
 
 use crate::app::App;
 
@@ -15,8 +15,11 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     frame.render_widget(
         Paragraph::new(text)
             .wrap(Wrap { trim: false })
-            .block(Block::bordered().title("Hardware")),
+            .block(app.theme.block("Hardware")),
         body,
     );
-    frame.render_widget(Paragraph::new("[h] home   [q] quit"), footer);
+    frame.render_widget(
+        Paragraph::new("[h] home   [F2] theme   [q] quit").style(app.theme.muted_style()),
+        footer,
+    );
 }

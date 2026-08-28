@@ -4,14 +4,15 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Clear, Paragraph, Wrap};
 
 use crate::app::QuitChoice;
 use crate::daemon_client::ChildSummary;
+use crate::theme::Theme;
 
-pub fn render(frame: &mut Frame, choice: QuitChoice, running: &[ChildSummary]) {
+pub fn render(frame: &mut Frame, theme: Theme, choice: QuitChoice, running: &[ChildSummary]) {
     let area = centered_rect(60, 40, frame.area());
     frame.render_widget(Clear, area);
 
@@ -30,14 +31,16 @@ pub fn render(frame: &mut Frame, choice: QuitChoice, running: &[ChildSummary]) {
         Line::raw(running_line),
         Line::raw(""),
         option_line(
+            theme,
             "[K]eep serving — leave models running in the background",
             choice == QuitChoice::Keep,
         ),
         option_line(
+            theme,
             "[S]top everything — stop all models and the daemon now",
             choice == QuitChoice::Stop,
         ),
-        option_line("[C]ancel — go back", choice == QuitChoice::Cancel),
+        option_line(theme, "[C]ancel — go back", choice == QuitChoice::Cancel),
         Line::raw(""),
         Line::raw("Enter to confirm, Esc to cancel"),
     ];
@@ -45,17 +48,14 @@ pub fn render(frame: &mut Frame, choice: QuitChoice, running: &[ChildSummary]) {
     frame.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
-            .block(Block::bordered().title("Quit CraneStudio?")),
+            .block(theme.block("Quit CraneStudio?")),
         area,
     );
 }
 
-fn option_line(text: &str, selected: bool) -> Line<'static> {
+fn option_line(theme: Theme, text: &str, selected: bool) -> Line<'static> {
     let style = if selected {
-        Style::new()
-            .fg(Color::Black)
-            .bg(Color::Cyan)
-            .add_modifier(Modifier::BOLD)
+        theme.highlight_style()
     } else {
         Style::new()
     };

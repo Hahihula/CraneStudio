@@ -17,6 +17,7 @@ use studio_core::hardware::HardwareReport;
 
 use crate::daemon_client::{ChildSummary, DaemonClient};
 use crate::screens;
+use crate::theme::Theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -79,6 +80,10 @@ pub struct App {
     pub status_line: Option<String>,
     pub last_running: Vec<ChildSummary>,
     pub known_ports: HashMap<u64, u16>,
+    /// Cycled with `F2`, remembered in `config.ron`.
+    pub theme: Theme,
+    /// Incremented every 500ms tick — drives `theme::spinner`.
+    pub tick: u64,
 
     bg_tx: tokio::sync::mpsc::UnboundedSender<BackgroundEvent>,
     bg_rx: tokio::sync::mpsc::UnboundedReceiver<BackgroundEvent>,
@@ -124,6 +129,8 @@ impl App {
             status_line: None,
             last_running: Vec::new(),
             known_ports: HashMap::new(),
+            theme: Theme::from_name(chat_config.theme),
+            tick: 0,
             bg_tx,
             bg_rx,
         };
@@ -250,9 +257,19 @@ impl App {
     }
 
     fn on_tick(&mut self) {
+        self.tick = self.tick.wrapping_add(1);
         if matches!(self.screen, Screen::Home | Screen::Connect) {
             self.spawn_status_refresh();
         }
+    }
+
+    fn cycle_theme(&mut self) {
+        let path = studio_core::paths::config_dir().join("config.ron");
+        let mut config = studio_core::config::Config::load(&path);
+        config.theme = config.theme.next();
+        let _ = config.save(&path);
+        self.theme = Theme::from_name(config.theme);
+        self.status_line = Some(format!("theme: {}", config.theme.label()));
     }
 
     fn handle_background(&mut self, event: BackgroundEvent) {
@@ -316,6 +333,7 @@ impl App {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.begin_quit().await;
             }
+            KeyCode::F(2) => self.cycle_theme(),
             KeyCode::Char('q') | KeyCode::Esc => self.begin_quit().await,
             KeyCode::Char('h') => self.screen = Screen::Home,
             KeyCode::Char('d') => self.screen = Screen::Doctor,
@@ -370,7 +388,7 @@ impl App {
             Screen::Chat => screens::chat::render(self, frame),
         }
         if let Some(choice) = self.quit_prompt {
-            screens::quit_prompt::render(frame, choice, &self.last_running);
+            screens::quit_prompt::render(frame, self.theme, choice, &self.last_running);
         }
     }
 }

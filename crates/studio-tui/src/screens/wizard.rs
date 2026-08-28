@@ -16,9 +16,9 @@ use std::fs::File;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
 use studio_core::catalog::Classification;
 use studio_core::catalog::local::LocalCandidate;
 use studio_core::catalog::schema::{Format, KvQuant};
@@ -352,27 +352,28 @@ pub fn render(app: &mut App, frame: &mut Frame) {
             format!("Launch wizard — {}", c.path.display())
         });
     frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            title,
-            Style::new().add_modifier(Modifier::BOLD),
-        ))),
+        Paragraph::new(Line::from(Span::styled(title, app.theme.header_style()))),
         header,
     );
 
     if app.wizard.launching {
-        frame.render_widget(Paragraph::new("launching…").block(Block::bordered()), body);
+        frame.render_widget(
+            Paragraph::new(format!("{} launching…", crate::theme::spinner(app.tick)))
+                .block(app.theme.block("")),
+            body,
+        );
     } else if let Some(err) = &app.wizard.error {
         frame.render_widget(
             Paragraph::new(format!("could not evaluate this model: {err}"))
                 .wrap(Wrap { trim: false })
-                .block(Block::bordered()),
+                .block(app.theme.block("")),
             body,
         );
     } else if let Some(result) = app.wizard.result.clone() {
         render_result(app, &result, frame, body);
     } else {
         frame.render_widget(
-            Paragraph::new("no model selected").block(Block::bordered()),
+            Paragraph::new("no model selected").block(app.theme.block("")),
             body,
         );
     }
@@ -386,11 +387,14 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         // so silently doing nothing on Enter looked exactly like a hang.
         status.clone()
     } else if launchable {
-        "[\u{2191}\u{2193}] choose   [Enter] launch   [Esc] back".to_string()
+        "[\u{2191}\u{2193}] choose   [Enter] launch   [F2] theme   [Esc] back".to_string()
     } else {
-        "[Esc] back".to_string()
+        "[F2] theme   [Esc] back".to_string()
     };
-    frame.render_widget(Paragraph::new(footer_text), footer);
+    frame.render_widget(
+        Paragraph::new(footer_text).style(app.theme.muted_style()),
+        footer,
+    );
 }
 
 fn render_result(app: &App, result: &SolveResult, frame: &mut Frame, area: ratatui::layout::Rect) {
@@ -402,7 +406,7 @@ fn render_result(app: &App, result: &SolveResult, frame: &mut Frame, area: ratat
                 .enumerate()
                 .map(|(i, c)| {
                     let style = if i == app.wizard.selected_config {
-                        Style::new().fg(Color::Black).bg(Color::Green)
+                        app.theme.highlight_style()
                     } else {
                         Style::new()
                     };
@@ -413,8 +417,7 @@ fn render_result(app: &App, result: &SolveResult, frame: &mut Frame, area: ratat
                 })
                 .collect();
             frame.render_widget(
-                List::new(items)
-                    .block(Block::bordered().title("Reaches 256k — pick a configuration")),
+                List::new(items).block(app.theme.block("Reaches 256k — pick a configuration")),
                 area,
             );
         }
@@ -425,7 +428,7 @@ fn render_result(app: &App, result: &SolveResult, frame: &mut Frame, area: ratat
         } => {
             let mut lines = vec![Line::from(Span::styled(
                 format!("Short of 256k — best reachable context is {achieved_context}"),
-                Style::new().fg(Color::Yellow),
+                Style::new().fg(app.theme.warning),
             ))];
             lines.push(Line::from(describe_config(app, &db, best)));
             lines.push(Line::raw(""));
@@ -442,7 +445,7 @@ fn render_result(app: &App, result: &SolveResult, frame: &mut Frame, area: ratat
             frame.render_widget(
                 Paragraph::new(lines)
                     .wrap(Wrap { trim: false })
-                    .block(Block::bordered().title("Short of target")),
+                    .block(app.theme.block("Short of target")),
                 area,
             );
         }
@@ -455,7 +458,7 @@ fn render_result(app: &App, result: &SolveResult, frame: &mut Frame, area: ratat
                     "This model doesn't fit usably on this hardware (best: {achieved_context} context, below the {} floor).",
                     studio_core::estimator::CONTEXT_FLOOR
                 ),
-                Style::new().fg(Color::Red),
+                Style::new().fg(app.theme.error),
             ))];
             for s in suggestions {
                 lines.push(Line::from(describe_suggestion(s)));
@@ -463,7 +466,7 @@ fn render_result(app: &App, result: &SolveResult, frame: &mut Frame, area: ratat
             frame.render_widget(
                 Paragraph::new(lines)
                     .wrap(Wrap { trim: false })
-                    .block(Block::bordered().title("Unusable")),
+                    .block(app.theme.block("Unusable")),
                 area,
             );
         }

@@ -61,6 +61,10 @@ pub struct Config {
     /// the chat screen (`Ctrl-T`) and remembered as "last used" here.
     #[serde(default = "default_temperature")]
     pub temperature: f64,
+    /// TUI color palette, cycled with `F2` from any screen and remembered
+    /// here.
+    #[serde(default)]
+    pub theme: ThemeName,
 }
 
 impl Default for Config {
@@ -71,6 +75,38 @@ impl Default for Config {
             system_prompt: default_system_prompt(),
             max_tokens: default_max_tokens(),
             temperature: default_temperature(),
+            theme: ThemeName::default(),
+        }
+    }
+}
+
+/// Named color palettes for the TUI (`studio-tui`'s `theme` module maps each
+/// to concrete colors) — kept here, not in `studio-tui`, since it's
+/// persisted config data like everything else in this file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ThemeName {
+    #[default]
+    Monokai,
+    Dracula,
+    Plain,
+}
+
+impl ThemeName {
+    #[must_use]
+    pub fn next(self) -> Self {
+        match self {
+            ThemeName::Monokai => ThemeName::Dracula,
+            ThemeName::Dracula => ThemeName::Plain,
+            ThemeName::Plain => ThemeName::Monokai,
+        }
+    }
+
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            ThemeName::Monokai => "Monokai",
+            ThemeName::Dracula => "Dracula",
+            ThemeName::Plain => "Plain",
         }
     }
 }
@@ -145,6 +181,7 @@ mod tests {
         assert_eq!(loaded.system_prompt, DEFAULT_SYSTEM_PROMPT);
         assert_eq!(loaded.max_tokens, DEFAULT_MAX_TOKENS);
         assert!((loaded.temperature - DEFAULT_TEMPERATURE).abs() < f64::EPSILON);
+        assert_eq!(loaded.theme, ThemeName::Monokai);
 
         #[cfg(unix)]
         {
@@ -161,6 +198,14 @@ mod tests {
         assert_eq!(config.system_prompt, DEFAULT_SYSTEM_PROMPT);
         assert_eq!(config.max_tokens, DEFAULT_MAX_TOKENS);
         assert!((config.temperature - DEFAULT_TEMPERATURE).abs() < f64::EPSILON);
+        assert_eq!(config.theme, ThemeName::Monokai);
+    }
+
+    #[test]
+    fn theme_cycles_through_all_three_and_back() {
+        assert_eq!(ThemeName::Monokai.next(), ThemeName::Dracula);
+        assert_eq!(ThemeName::Dracula.next(), ThemeName::Plain);
+        assert_eq!(ThemeName::Plain.next(), ThemeName::Monokai);
     }
 
     #[test]

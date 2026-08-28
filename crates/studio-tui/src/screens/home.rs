@@ -3,9 +3,9 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, List, ListItem, Paragraph};
+use ratatui::widgets::{List, ListItem, Paragraph};
 
 use crate::app::App;
 use crate::daemon_client::ChildState;
@@ -25,7 +25,7 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     frame.render_widget(
         Paragraph::new(Line::from(vec![Span::styled(
             "CraneStudio",
-            Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            app.theme.header_style(),
         )])),
         header,
     );
@@ -37,19 +37,21 @@ pub fn render(app: &mut App, frame: &mut Frame) {
             "No models running — press [b] to browse and launch one.",
         )]
     } else {
+        let theme = app.theme;
+        let spinner = crate::theme::spinner(app.tick);
         app.last_running
             .iter()
             .map(|child| {
                 let (glyph, color) = match &child.state {
-                    ChildState::Healthy => ("\u{25cf} healthy", Color::Green),
-                    ChildState::Starting => ("\u{25cb} starting", Color::Yellow),
+                    ChildState::Healthy => ("\u{25cf} healthy".to_string(), theme.success),
+                    ChildState::Starting => (format!("{spinner} starting"), theme.warning),
                     ChildState::Exited { classification, .. } => {
                         return ListItem::new(Line::from(vec![Span::styled(
                             format!("\u{2715} {} — exited ({classification})", child.info.label),
-                            Style::new().fg(Color::Red),
+                            Style::new().fg(theme.error),
                         )]));
                     }
-                    ChildState::Unknown => ("? unknown", Color::Gray),
+                    ChildState::Unknown => ("? unknown".to_string(), theme.muted),
                 };
                 let port = app.known_ports.get(&child.info.id).copied();
                 let port_note = port
@@ -62,16 +64,15 @@ pub fn render(app: &mut App, frame: &mut Frame) {
             })
             .collect()
     };
-    frame.render_widget(
-        List::new(items).block(Block::bordered().title("Running")),
-        running,
-    );
+    frame.render_widget(List::new(items).block(app.theme.block("Running")), running);
 
-    let status = app
-        .status_line
-        .as_deref()
-        .unwrap_or("[b] browse models   [d] hardware   [r] connect/chat (if running)   [q] quit");
-    frame.render_widget(Paragraph::new(status), footer);
+    let status = app.status_line.as_deref().unwrap_or(
+        "[b] browse models   [d] hardware   [r] connect/chat (if running)   [F2] theme   [q] quit",
+    );
+    frame.render_widget(
+        Paragraph::new(status).style(app.theme.muted_style()),
+        footer,
+    );
 }
 
 fn hardware_summary(app: &App) -> String {

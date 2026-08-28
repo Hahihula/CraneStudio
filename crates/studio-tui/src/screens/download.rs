@@ -8,7 +8,9 @@ use std::path::Path;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout};
-use ratatui::widgets::{Block, Paragraph, Wrap};
+use ratatui::style::Style;
+use ratatui::text::Span;
+use ratatui::widgets::{Gauge, Paragraph, Wrap};
 use studio_core::catalog::Classification;
 use studio_core::catalog::local::LocalCandidate;
 use studio_core::catalog::schema::{Format, ModelEntry};
@@ -16,24 +18,35 @@ use studio_core::download::{CancellationToken, Event, RepoDownload, download_rep
 
 use crate::app::{App, BackgroundEvent, Screen};
 
+/// A single file's download state, kept structured (not pre-formatted text)
+/// so `render` can drive a real progress bar instead of a literal percent
+/// string.
+#[derive(Debug, Clone)]
+pub enum FileStatus {
+    Starting { resumed_from: u64, total: u64 },
+    Progress { downloaded: u64, total: u64 },
+    Verifying,
+    Completed,
+    Cancelled,
+}
+
 #[derive(Default)]
 pub struct State {
     pub label: String,
-    /// (filename, status) — `Progress` events update a file's own line in
+    /// One entry per file — `Progress` events update a file's own entry in
     /// place rather than appending, so a multi-file download doesn't
     /// scroll past its own progress.
-    pub lines: Vec<(String, String)>,
+    pub lines: Vec<(String, FileStatus)>,
     pub error: Option<String>,
     pub cancel: Option<CancellationToken>,
 }
 
 impl State {
-    fn line_mut(&mut self, file: &str) -> &mut String {
+    fn set_status(&mut self, file: &str, status: FileStatus) {
         if let Some(pos) = self.lines.iter().position(|(f, _)| f == file) {
-            &mut self.lines[pos].1
+            self.lines[pos].1 = status;
         } else {
-            self.lines.push((file.to_string(), String::new()));
-            &mut self.lines.last_mut().expect("just pushed").1
+            self.lines.push((file.to_string(), status));
         }
     }
 
@@ -43,39 +56,37 @@ impl State {
                 file,
                 resume_from,
                 total,
-            } => {
-                let text = if *resume_from > 0 {
-                    format!(
-                        "resuming from {} of {}",
-                        crate::fmt::bytes(*resume_from),
-                        crate::fmt::bytes(*total)
-                    )
-                } else {
-                    format!("starting ({})", crate::fmt::bytes(*total))
-                };
-                *self.line_mut(file) = text;
-            }
+            } => self.set_status(
+                file,
+                FileStatus::Starting {
+                    resumed_from: *resume_from,
+                    total: *total,
+                },
+            ),
             Event::Progress {
                 file,
                 downloaded,
                 total,
-            } => {
-                #[allow(clippy::cast_precision_loss)]
-                let percent = if *total > 0 {
-                    (*downloaded as f64 / *total as f64) * 100.0
-                } else {
-                    0.0
-                };
-                *self.line_mut(file) = format!(
-                    "{} / {} ({percent:.1}%)",
-                    crate::fmt::bytes(*downloaded),
-                    crate::fmt::bytes(*total)
-                );
-            }
-            Event::Verifying { file } => *self.line_mut(file) = "verifying checksum…".to_string(),
-            Event::Completed { file } => *self.line_mut(file) = "done".to_string(),
-            Event::Cancelled { file } => *self.line_mut(file) = "cancelled".to_string(),
+            } => self.set_status(
+                file,
+                FileStatus::Progress {
+                    downloaded: *downloaded,
+                    total: *total,
+                },
+            ),
+            Event::Verifying { file } => self.set_status(file, FileStatus::Verifying),
+            Event::Completed { file } => self.set_status(file, FileStatus::Completed),
+            Event::Cancelled { file } => self.set_status(file, FileStatus::Cancelled),
         }
+    }
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn ratio(numerator: u64, denominator: u64) -> f64 {
+    if denominator == 0 {
+        0.0
+    } else {
+        (numerator as f64 / denominator as f64).clamp(0.0, 1.0)
     }
 }
 
@@ -246,7 +257,10 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     .areas(frame.area());
 
     frame.render_widget(
-        Paragraph::new(format!("Downloading — {}", app.download.label)),
+        Paragraph::new(Span::styled(
+            format!("Downloading — {}", app.download.label),
+            app.theme.header_style(),
+        )),
         header,
     );
 
@@ -254,26 +268,26 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         frame.render_widget(
             Paragraph::new(format!("download failed: {err}"))
                 .wrap(Wrap { trim: false })
-                .block(Block::bordered().title("Failed")),
+                .style(Style::new().fg(app.theme.error))
+                .block(app.theme.block("Failed")),
             body,
         );
     } else {
-        let text = if app.download.lines.is_empty() {
-            "starting…".to_string()
+        let block = app.theme.block("Progress");
+        let inner = block.inner(body);
+        frame.render_widget(block, body);
+        if app.download.lines.is_empty() {
+            frame.render_widget(
+                Paragraph::new(format!("{} starting…", crate::theme::spinner(app.tick))),
+                inner,
+            );
         } else {
-            app.download
-                .lines
-                .iter()
-                .map(|(file, status)| format!("{file}: {status}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
-        frame.render_widget(
-            Paragraph::new(text)
-                .wrap(Wrap { trim: false })
-                .block(Block::bordered().title("Progress")),
-            body,
-        );
+            let rows = Layout::vertical(vec![Constraint::Length(1); app.download.lines.len()])
+                .split(inner);
+            for ((file, status), row) in app.download.lines.iter().zip(rows.iter()) {
+                render_file_row(&app.theme, app.tick, file, status, frame, *row);
+            }
+        }
     }
 
     let footer_text = if app.download.error.is_some() {
@@ -281,5 +295,81 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     } else {
         "[Esc] cancel"
     };
-    frame.render_widget(Paragraph::new(footer_text), footer);
+    frame.render_widget(
+        Paragraph::new(footer_text).style(app.theme.muted_style()),
+        footer,
+    );
+}
+
+fn render_file_row(
+    theme: &crate::theme::Theme,
+    tick: u64,
+    file: &str,
+    status: &FileStatus,
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+) {
+    match status {
+        FileStatus::Starting {
+            resumed_from,
+            total,
+        } => {
+            let label = if *resumed_from > 0 {
+                format!(
+                    "{file}: resuming from {} of {}",
+                    crate::fmt::bytes(*resumed_from),
+                    crate::fmt::bytes(*total)
+                )
+            } else {
+                format!("{file}: starting ({})", crate::fmt::bytes(*total))
+            };
+            frame.render_widget(
+                Gauge::default()
+                    .ratio(ratio(*resumed_from, *total))
+                    .label(label)
+                    .gauge_style(Style::new().fg(theme.accent)),
+                area,
+            );
+        }
+        FileStatus::Progress { downloaded, total } => {
+            let percent = ratio(*downloaded, *total) * 100.0;
+            let label = format!(
+                "{file}: {} / {} ({percent:.1}%)",
+                crate::fmt::bytes(*downloaded),
+                crate::fmt::bytes(*total)
+            );
+            frame.render_widget(
+                Gauge::default()
+                    .ratio(ratio(*downloaded, *total))
+                    .label(label)
+                    .gauge_style(Style::new().fg(theme.accent)),
+                area,
+            );
+        }
+        FileStatus::Verifying => {
+            frame.render_widget(
+                Paragraph::new(format!(
+                    "{} {file}: verifying checksum…",
+                    crate::theme::spinner(tick)
+                ))
+                .style(Style::new().fg(theme.warning)),
+                area,
+            );
+        }
+        FileStatus::Completed => {
+            frame.render_widget(
+                Gauge::default()
+                    .ratio(1.0)
+                    .label(format!("{file}: done"))
+                    .gauge_style(Style::new().fg(theme.success)),
+                area,
+            );
+        }
+        FileStatus::Cancelled => {
+            frame.render_widget(
+                Paragraph::new(format!("{file}: cancelled")).style(Style::new().fg(theme.muted)),
+                area,
+            );
+        }
+    }
 }

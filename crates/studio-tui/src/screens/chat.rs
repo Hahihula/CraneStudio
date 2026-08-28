@@ -21,9 +21,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use futures_util::StreamExt as _;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Wrap};
 
 use crate::app::{App, BackgroundEvent, Screen};
 
@@ -539,9 +539,12 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     .areas(frame.area());
 
     frame.render_widget(
-        Paragraph::new(format!(
-            "Chat — {}  (temp {}, max_tokens {})",
-            app.connect.name, app.chat.temperature, app.chat.max_tokens
+        Paragraph::new(Span::styled(
+            format!(
+                "Chat — {}  (temp {}, max_tokens {})",
+                app.connect.name, app.chat.temperature, app.chat.max_tokens
+            ),
+            app.theme.header_style(),
         )),
         header,
     );
@@ -549,8 +552,8 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     let mut lines: Vec<Line> = Vec::new();
     for (role, content) in &app.chat.messages {
         let (label, color) = match role {
-            Role::User => ("you", Color::Cyan),
-            Role::Assistant => ("model", Color::Green),
+            Role::User => ("you", app.theme.accent),
+            Role::Assistant => ("model", app.theme.success),
         };
         lines.push(Line::from(Span::styled(
             format!("{label}:"),
@@ -564,18 +567,18 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     if let Some(err) = &app.chat.error {
         lines.push(Line::from(Span::styled(
             format!("error: {err}"),
-            Style::new().fg(Color::Red),
+            Style::new().fg(app.theme.error),
         )));
     }
     frame.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
-            .block(Block::bordered()),
+            .block(app.theme.block("")),
         body,
     );
 
     let input_title = match (app.chat.streaming, app.chat.mode) {
-        (true, _) => "generating…".to_string(),
+        (true, _) => format!("{} generating…", crate::theme::spinner(app.tick)),
         (false, InputMode::ImagePath) => "image path".to_string(),
         (false, InputMode::SystemPrompt) => "system prompt (empty clears it)".to_string(),
         (false, InputMode::MaxTokens) => "max_tokens".to_string(),
@@ -597,7 +600,7 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         }
     };
     frame.render_widget(
-        Paragraph::new(format!("{}_", app.chat.input)).block(Block::bordered().title(input_title)),
+        Paragraph::new(format!("{}_", app.chat.input)).block(app.theme.block(input_title)),
         input_area,
     );
 
@@ -608,10 +611,13 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         InputMode::SystemPrompt => "[Enter] save (empty clears it)   [Esc] cancel",
         InputMode::MaxTokens | InputMode::Temperature => "[Enter] save   [Esc] cancel",
         InputMode::Message => {
-            "[Enter] send   [Ctrl-A] image   [Ctrl-P] system prompt   [Ctrl-L] max_tokens   [Ctrl-T] temperature   [Esc] back   [Ctrl-C] quit"
+            "[Enter] send   [Ctrl-A] image   [Ctrl-P] system prompt   [Ctrl-L] max_tokens   [Ctrl-T] temperature   [F2] theme   [Esc] back   [Ctrl-C] quit"
         }
     };
-    frame.render_widget(Paragraph::new(footer_text), footer);
+    frame.render_widget(
+        Paragraph::new(footer_text).style(app.theme.muted_style()),
+        footer,
+    );
 }
 
 #[cfg(test)]

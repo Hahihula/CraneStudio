@@ -8,9 +8,9 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, List, ListItem, Paragraph, Tabs};
+use ratatui::widgets::{List, ListItem, Paragraph, Tabs};
 use studio_core::catalog::hf::HfCandidate;
 use studio_core::catalog::local::LocalCandidate;
 use studio_core::catalog::{Catalog, Classification, Source};
@@ -219,9 +219,11 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         Tab::Search => 2,
     };
     frame.render_widget(
-        Tabs::new(titles)
-            .select(selected_tab)
-            .highlight_style(Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Tabs::new(titles).select(selected_tab).highlight_style(
+            Style::new()
+                .fg(app.theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ),
         tabs_area,
     );
 
@@ -239,16 +241,23 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     } else if let Some(status) = &app.status_line {
         status.clone()
     } else {
-        "[Tab] switch tab   [\u{2191}\u{2193}] move   [Enter] select   [/] search   [Esc] back"
+        "[Tab] switch tab   [\u{2191}\u{2193}] move   [Enter] select   [/] search   [F2] theme   [Esc] back"
             .to_string()
     };
-    frame.render_widget(Paragraph::new(footer_text), footer);
+    frame.render_widget(
+        Paragraph::new(footer_text).style(app.theme.muted_style()),
+        footer,
+    );
 }
 
 fn render_catalog(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
     let Some(catalog) = &app.browser.catalog else {
         frame.render_widget(
-            Paragraph::new("loading catalog…").block(Block::bordered()),
+            Paragraph::new(format!(
+                "{} loading catalog…",
+                crate::theme::spinner(app.tick)
+            ))
+            .block(app.theme.block("")),
             area,
         );
         return;
@@ -260,22 +269,27 @@ fn render_catalog(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
         .map(|(i, model)| {
             let variants = model.variants.len();
             styled_item(
+                &app.theme,
                 i == app.browser.selected,
-                format!(
+                Span::raw(format!(
                     "{} — {} ({variants} variant(s))",
                     model.id, model.display_name
-                ),
+                )),
             )
         })
         .collect();
     let title = format!("Catalog ({} models)", catalog.models.len());
-    frame.render_widget(List::new(items).block(Block::bordered().title(title)), area);
+    frame.render_widget(List::new(items).block(app.theme.block(title)), area);
 }
 
 fn render_local(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
     if app.browser.local.is_empty() {
         frame.render_widget(
-            Paragraph::new("no local models found (scanning…)").block(Block::bordered()),
+            Paragraph::new(format!(
+                "{} no local models found (scanning…)",
+                crate::theme::spinner(app.tick)
+            ))
+            .block(app.theme.block("")),
             area,
         );
         return;
@@ -286,27 +300,35 @@ fn render_local(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
         .iter()
         .enumerate()
         .map(|(i, candidate)| {
-            let (glyph, note) = classification_note(&candidate.classification);
+            let (glyph, color, note) = classification_note(&app.theme, &candidate.classification);
             styled_item(
+                &app.theme,
                 i == app.browser.selected,
-                format!("{glyph} {}{note}", candidate.path.display()),
+                Span::styled(
+                    format!("{glyph} {}{note}", candidate.path.display()),
+                    Style::new().fg(color),
+                ),
             )
         })
         .collect();
     frame.render_widget(
-        List::new(items).block(Block::bordered().title("Local models")),
+        List::new(items).block(app.theme.block("Local models")),
         area,
     );
 }
 
 fn render_search(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
     if app.browser.searching {
-        frame.render_widget(Paragraph::new("searching…").block(Block::bordered()), area);
+        frame.render_widget(
+            Paragraph::new(format!("{} searching…", crate::theme::spinner(app.tick)))
+                .block(app.theme.block("")),
+            area,
+        );
         return;
     }
     if app.browser.search_results.is_empty() {
         frame.render_widget(
-            Paragraph::new("press [/] to search HuggingFace").block(Block::bordered()),
+            Paragraph::new("press [/] to search HuggingFace").block(app.theme.block("")),
             area,
         );
         return;
@@ -317,33 +339,52 @@ fn render_search(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
         .iter()
         .enumerate()
         .map(|(i, candidate)| {
-            let (glyph, note) = classification_note(&candidate.classification);
+            let (glyph, color, note) = classification_note(&app.theme, &candidate.classification);
             let gated = if candidate.gated { " [gated]" } else { "" };
             styled_item(
+                &app.theme,
                 i == app.browser.selected,
-                format!("{glyph} {}{gated}{note}", candidate.repo_id),
+                Span::styled(
+                    format!("{glyph} {}{gated}{note}", candidate.repo_id),
+                    Style::new().fg(color),
+                ),
             )
         })
         .collect();
     frame.render_widget(
-        List::new(items).block(Block::bordered().title("HuggingFace search")),
+        List::new(items).block(app.theme.block("HuggingFace search")),
         area,
     );
 }
 
-fn classification_note(classification: &Classification) -> (&'static str, String) {
+fn classification_note(
+    theme: &crate::theme::Theme,
+    classification: &Classification,
+) -> (&'static str, ratatui::style::Color, String) {
     match classification {
-        Classification::Supported { model_type, .. } => ("\u{25cf}", format!(" — {model_type}")),
-        Classification::Unsupported { reason, .. } => ("\u{2715}", format!(" — {reason}")),
-        Classification::Unknown { reason } => ("?", format!(" — {reason}")),
+        Classification::Supported { model_type, .. } => {
+            ("\u{25cf}", theme.success, format!(" — {model_type}"))
+        }
+        Classification::Unsupported { reason, .. } => {
+            ("\u{2715}", theme.error, format!(" — {reason}"))
+        }
+        Classification::Unknown { reason } => ("?", theme.muted, format!(" — {reason}")),
     }
 }
 
-fn styled_item(selected: bool, text: String) -> ListItem<'static> {
+/// Selection highlight always wins over any semantic (success/error/muted)
+/// color a row's own `Span` might already carry — otherwise the selected
+/// row would keep e.g. its red "unsupported" foreground on top of the
+/// highlight background, which reads as broken rather than selected.
+fn styled_item(
+    theme: &crate::theme::Theme,
+    selected: bool,
+    span: Span<'static>,
+) -> ListItem<'static> {
     let style = if selected {
-        Style::new().fg(Color::Black).bg(Color::Cyan)
+        theme.highlight_style()
     } else {
-        Style::new()
+        span.style
     };
-    ListItem::new(Line::from(vec![Span::styled(text, style)]))
+    ListItem::new(Line::from(vec![Span::styled(span.content, style)]))
 }
