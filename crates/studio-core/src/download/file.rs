@@ -107,7 +107,7 @@ pub async fn download_file(
     }
 
     let part = part_path(dest);
-    let existing = fs::metadata(&part).await.map(|m| m.len()).unwrap_or(0);
+    let existing = fs::metadata(&part).await.map_or(0, |m| m.len());
 
     if existing > 0 && expected_size == Some(existing) {
         // Fully written already, just never verified/renamed — e.g. the

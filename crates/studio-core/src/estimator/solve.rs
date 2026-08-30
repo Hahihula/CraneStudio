@@ -243,7 +243,7 @@ fn blockers_for(config: &Config) -> Vec<Blocker> {
             bytes: p.vision_tower,
         });
     }
-    blockers.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+    blockers.sort_by_key(|b| std::cmp::Reverse(b.bytes));
     blockers
 }
 
