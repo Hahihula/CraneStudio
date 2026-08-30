@@ -1,3 +1,5 @@
 /target
 /builds
 /cache
+/target-ci
+/.cargo-docker

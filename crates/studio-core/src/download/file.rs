@@ -270,9 +270,11 @@ fn filename(dest: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use tempfile::TempDir;
-    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     use tokio::net::TcpListener;
 
+    // `AsyncReadExt`/`AsyncWriteExt` come in via `super::*` (file.rs imports them
+    // at module scope), so the test's `socket.read()` / `socket.write_all()`
+    // calls resolve without a second `use` here.
     use super::*;
 
     /// A minimal range-aware HTTP/1.1 server for exactly one GET request,

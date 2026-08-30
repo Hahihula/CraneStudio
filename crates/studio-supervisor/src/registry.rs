@@ -512,7 +512,7 @@ mod tests {
         let id2 = supervisor
             .launch(&shell_request("exit 0"), None, "second".to_string())
             .unwrap();
-        assert!(id2 != id);
+        assert_ne!(id2, id);
     }
 
     #[test]

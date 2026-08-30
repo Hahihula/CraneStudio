@@ -141,9 +141,7 @@ fn plan(
 ) -> Result<SolveResult, String> {
     let cfg = read_config(candidate)?;
     let weight_bytes = match candidate.format {
-        Format::Gguf => std::fs::metadata(&candidate.path)
-            .map(|m| m.len())
-            .unwrap_or(0),
+        Format::Gguf => std::fs::metadata(&candidate.path).map_or(0, |m| m.len()),
         Format::Safetensors => safetensors_dir_bytes(&candidate.path).unwrap_or(0),
     };
     if weight_bytes == 0 {
