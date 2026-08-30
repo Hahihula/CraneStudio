@@ -41,8 +41,10 @@ No toolchain, no Python, no install — one binary. Grab it from
 | Archive | For |
 | --- | --- |
 | `cranestudio-<version>-x86_64-linux-cuda.tar.gz` | Linux with an NVIDIA GPU (driver 525 or newer) |
+| `cranestudio-<version>-x86_64-windows-cuda.zip` | Windows with an NVIDIA GPU (driver 525 or newer) |
 | `cranestudio-<version>-aarch64-macos-metal.tar.gz` | Apple Silicon Macs |
-| `cranestudio-<version>-x86_64-linux-cpu.tar.gz` | anything else — runs everywhere, slow on big models |
+| `cranestudio-<version>-x86_64-linux-cpu.tar.gz` | Linux without a usable GPU — runs everywhere, slow on big models |
+| `cranestudio-<version>-x86_64-windows-cpu.zip` | Windows without a usable GPU |
 
 ```sh
 tar xzf cranestudio-*-x86_64-linux-cuda.tar.gz
@@ -51,9 +53,20 @@ cd cranestudio-*-x86_64-linux-cuda
 ./cranestudio            # run it
 ```
 
-Not sure which one? Take the CPU archive and run `./cranestudio doctor` — it
-prints the GPU, VRAM, driver and disk it found, and says so plainly when a GPU
-build would find no GPU.
+```powershell
+Expand-Archive cranestudio-*-x86_64-windows-cuda.zip -DestinationPath .
+cd cranestudio-*-x86_64-windows-cuda
+.\cranestudio.exe doctor
+.\cranestudio.exe
+```
+
+Not sure which one? Take the CPU archive and run `cranestudio doctor` — it prints
+the GPU, VRAM, driver and disk it found, and says so plainly when a GPU build
+would find no GPU.
+
+On Windows, run it in **Windows Terminal** (or any modern terminal), not the
+legacy console host: the meters and the splash use block and braille glyphs that
+`conhost.exe` renders as boxes.
 
 Every archive is built by the pipeline from the tagged commit — never uploaded by
 hand — and ships with its SHA-256 plus a `BUILD-PROVENANCE.txt` naming the
@@ -329,9 +342,17 @@ register them with the tags the pipeline expects:
 
 | Tag(s) | Runner | Builds |
 | --- | --- | --- |
-| `docker` | any Linux docker executor | checks, CPU archive, releases, mirror |
-| `cuda` | Linux + NVIDIA GPU with the CUDA toolkit (`nvcc`) | CUDA archive |
+| `docker` | any Linux docker executor | checks, Linux CPU archive, releases, mirror |
+| `cuda` | Linux + NVIDIA GPU with the CUDA toolkit (`nvcc`) | Linux CUDA archive |
 | `macos`, `metal` | Apple Silicon, shell executor with Xcode CLT | Metal archive |
+| `windows` | Windows shell executor (PowerShell) + MSVC build tools + NASM | Windows CPU archive |
+| `windows`, `cuda-windows` | the same, plus the Windows CUDA toolkit | Windows CUDA archive |
+
+The Windows jobs install rustup, import the Visual Studio developer environment
+and install NASM via Chocolatey when they're missing, so a bare Windows box only
+needs the MSVC build tools present (or reachable through `vswhere`). NASM isn't
+avoidable: `reqwest` pulls `rustls`, which builds aws-lc's assembly, and
+`crane-serve` enables the same stack.
 
 Set `GITHUB_TOKEN` (masked, `contents: write` on the mirror) in the project's
 CI/CD variables; everything else uses GitLab's own job token. A shell runner that

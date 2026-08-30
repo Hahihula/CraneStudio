@@ -296,7 +296,30 @@ fn send_signal(pid: u32, signal: Signal) {
     }
 }
 
-#[cfg(not(unix))]
+/// Windows has nothing to send that means "please exit" to another console
+/// process: `GenerateConsoleCtrlEvent` only reaches processes sharing our own
+/// console (and would then hit the daemon itself), and `WM_CLOSE` only reaches
+/// windowed apps. So both requests terminate the child outright — which is safe
+/// here precisely because a crane-serve child holds nothing unsaved: it is a
+/// stateless inference server whose only durable state is the model file it
+/// read. `/T` takes any grandchildren with it, and without `/F` a busy
+/// inference process would ignore the request entirely.
+///
+/// The alternative — keeping the `tokio::process::Child` handle around to call
+/// `kill()` on — doesn't fit: the handle is owned by the task awaiting the
+/// child's exit, and this registry deliberately tracks pids so that a *previous*
+/// daemon's children can be reaped too (`reap_stale_children`).
+#[cfg(windows)]
+fn send_signal(pid: u32, signal: Signal) {
+    let _ = signal;
+    let _ = std::process::Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+}
+
+#[cfg(not(any(unix, windows)))]
 fn send_signal(_pid: u32, _signal: Signal) {}
 
 fn exit_status_parts(
@@ -347,10 +370,57 @@ pub fn reap_stale_children(pidfile: &std::path::Path) -> Vec<u32> {
     reaped
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows)))]
 #[must_use]
 pub fn reap_stale_children(_pidfile: &std::path::Path) -> Vec<u32> {
     Vec::new()
+}
+
+/// The Windows counterpart, with the same guard the Linux version applies for
+/// the same reason: Windows recycles pids eagerly, so a pid from a previous run
+/// is only killed after confirming it still belongs to *our* executable running
+/// the `__serve` re-exec. Windows exposes a process's command line through WMI
+/// rather than a file, which is what the PowerShell call reads; if that lookup
+/// fails for any reason the pid is left alone, because killing the wrong process
+/// is far worse than leaving a stale one for the user to notice.
+#[cfg(windows)]
+#[must_use]
+pub fn reap_stale_children(pidfile: &std::path::Path) -> Vec<u32> {
+    let Ok(contents) = std::fs::read_to_string(pidfile) else {
+        return Vec::new();
+    };
+    let image = std::env::current_exe()
+        .ok()
+        .and_then(|path| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().to_lowercase())
+        })
+        .unwrap_or_else(|| "cranestudio.exe".to_string());
+
+    let mut reaped = Vec::new();
+    for line in contents.lines() {
+        let Ok(pid) = line.trim().parse::<u32>() else {
+            continue;
+        };
+        let Ok(output) = std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                &format!("(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').CommandLine"),
+            ])
+            .output()
+        else {
+            continue;
+        };
+        let command_line = String::from_utf8_lossy(&output.stdout).to_lowercase();
+        if command_line.contains(&image) && command_line.contains("__serve") {
+            send_signal(pid, Signal::Kill);
+            reaped.push(pid);
+        }
+    }
+    let _ = std::fs::remove_file(pidfile);
+    reaped
 }
 
 #[cfg(test)]

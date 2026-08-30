@@ -18,6 +18,16 @@
 #                   setup.
 #   `metal`,`macos` Apple Silicon, shell executor with Xcode command line tools.
 #                   macOS cannot run docker images, so this job is shell-only.
+#   `windows`       Windows shell executor (PowerShell) with the MSVC build
+#                   tools and NASM. NASM is not optional: reqwest pulls rustls,
+#                   which builds aws-lc's assembly, and crane-serve enables it
+#                   too — so it cannot be dropped from our side. The job installs
+#                   it with Chocolatey if it's missing, and imports the Visual
+#                   Studio developer environment when `cl.exe` isn't on PATH.
+#   `windows`,`cuda-windows`
+#                   The same, plus the Windows CUDA toolkit. Tagged separately
+#                   from Linux `cuda` so a Linux GPU runner never picks up a
+#                   Windows job (and vice versa).
 #
 # ── Variables to set in the project (Settings → CI/CD → Variables) ────────────
 #   GITHUB_TOKEN    masked. Contents: write on the GitHub mirror repo — used for
@@ -198,6 +208,87 @@ check:catalog-live:
     ( cd dist && sha256sum "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256" )
     cat "dist/${NAME}.tar.gz.sha256"
 
+# PowerShell rather than bash, and `.zip` rather than `.tar.gz` — a Windows user
+# double-clicks a zip; a tarball needs a tool they may not have. The contents,
+# the naming scheme and the provenance file are otherwise identical to the Unix
+# archives, and the checksum is written in `sha256sum` format so the release
+# notes stay uniform across platforms.
+.package_windows: &package_windows
+  - |
+    $ErrorActionPreference = "Stop"
+    $version = $env:CI_COMMIT_TAG
+    if ($version) { $version = $version -replace '^v', '' } else { $version = "0.0.0-$env:CI_COMMIT_SHORT_SHA" }
+    $name = "cranestudio-$version-$env:ASSET_TARGET-$env:ASSET_BACKEND"
+    New-Item -ItemType Directory -Force -Path "dist/$name" | Out-Null
+    Copy-Item "target/release/cranestudio.exe" "dist/$name/"
+    if (Test-Path README.md) { Copy-Item README.md "dist/$name/" }
+    if (Test-Path LICENSE)   { Copy-Item LICENSE   "dist/$name/" }
+    $craneRev = (Select-String -Path Cargo.toml -Pattern '^crane-serve = ' | Select-Object -First 1).Line -replace '.*rev = "([^"]*)".*', '$1'
+    $features = if ($env:CARGO_FEATURES) { $env:CARGO_FEATURES } else { "(none, CPU build)" }
+    $tag = if ($env:CI_COMMIT_TAG) { $env:CI_COMMIT_TAG } else { "(untagged)" }
+    $buildLine = if ($env:CARGO_FEATURES) { "  cargo build --release --locked --features $env:CARGO_FEATURES" } else { "  cargo build --release --locked" }
+    @(
+      "CraneStudio $version"
+      ""
+      "built-by      GitLab CI, $env:CI_PROJECT_URL/-/jobs/$env:CI_JOB_ID"
+      "pipeline      $env:CI_PIPELINE_URL"
+      "source        $env:CI_PROJECT_URL/-/commit/$env:CI_COMMIT_SHA"
+      "commit        $env:CI_COMMIT_SHA"
+      "tag           $tag"
+      "built-at      $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))"
+      "target        $env:ASSET_TARGET"
+      "backend       $env:ASSET_BACKEND"
+      "features      $features"
+      "rustc         $(rustc --version)"
+      "crane-serve   $craneRev"
+      "runner        $env:CI_RUNNER_DESCRIPTION ($env:CI_RUNNER_TAGS)"
+      ""
+      "Reproduce this build:"
+      "  git clone $env:CI_PROJECT_URL.git; cd $env:CI_PROJECT_NAME"
+      "  git checkout $env:CI_COMMIT_SHA"
+      $buildLine
+    ) | Set-Content -Encoding utf8 "dist/$name/BUILD-PROVENANCE.txt"
+    Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip" -Force
+    Remove-Item -Recurse -Force "dist/$name"
+    $hash = (Get-FileHash -Algorithm SHA256 "dist/$name.zip").Hash.ToLower()
+    "$hash  $name.zip" | Set-Content -Encoding ascii "dist/$name.zip.sha256"
+    Get-Content "dist/$name.zip.sha256"
+
+# Installs whatever the runner is missing, and says so — a Windows runner is
+# rarely as uniform as a container image. Everything here is idempotent, so a
+# fully provisioned runner just prints what it already has.
+.windows_setup: &windows_setup
+  - |
+    $ErrorActionPreference = "Stop"
+    $env:CARGO_HOME = "$env:CI_PROJECT_DIR\.cargo"
+    $env:PATH = "$env:CARGO_HOME\bin;$env:PATH"
+    if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+      Write-Host "installing the Rust toolchain with rustup"
+      Invoke-WebRequest -Uri https://win.rustup.rs/x86_64 -OutFile rustup-init.exe
+      .\rustup-init.exe -y --profile minimal --default-toolchain stable --no-modify-path
+      Remove-Item rustup-init.exe
+    }
+    # MSVC: the linker and the C compiler aws-lc needs. A runner service started
+    # outside a developer shell has neither on PATH, so import the environment.
+    if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
+      $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+      if (-not (Test-Path $vswhere)) { throw "Visual Studio build tools not found — install them on this runner (MSVC v143 + Windows SDK)" }
+      $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+      if (-not $vsPath) { throw "vswhere found no installation with the C++ build tools" }
+      Import-Module "$vsPath\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+      Enter-VsDevShell -VsInstallPath $vsPath -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
+    }
+    if (-not (Get-Command nasm.exe -ErrorAction SilentlyContinue)) {
+      if (Get-Command choco -ErrorAction SilentlyContinue) {
+        Write-Host "installing NASM (needed to build aws-lc's assembly)"
+        choco install nasm -y --no-progress
+        $env:PATH = "$env:ProgramFiles\NASM;$env:PATH"
+      } else {
+        throw "NASM is required (rustls/aws-lc builds assembly) and Chocolatey is unavailable — install NASM on this runner"
+      }
+    }
+    rustc --version; cargo --version; nasm -v
+
 # A freshly built binary that can't even print a hardware report is not shippable
 # — and on the GPU runners this also proves the backend initialises against a
 # real driver, which is the failure §12 wants caught here rather than by a user.
@@ -239,7 +330,15 @@ build:linux-cuda:
   stage: build
   # A CUDA *toolkit* image, not a runtime one: cudarc's build script shells out
   # to nvcc to learn the CUDA version (`cuda-version-from-build-system`).
-  image: nvidia/cuda:12.6.3-devel-ubuntu22.04
+  #
+  # Pinned to 12.3, not the latest 12.x: candle-kernels 0.11 polyfills
+  # `__hmax_nan`/`__hmin_nan` for `__CUDA_ARCH__ < 800` (we build for sm_75), and
+  # CUDA 12.4+ added those same functions to <cuda_fp16.h> for every arch — the
+  # two collide with a "function has already been defined" nvcc error. 12.3's
+  # headers still gate them behind sm_80, so the polyfill is the only definition.
+  # The user's driver runs 12.3-built binaries forward, so nothing downstream
+  # changes. Revisit if candle's guard learns about CUDART_VERSION.
+  image: nvidia/cuda:12.3.2-devel-ubuntu22.04
   tags: [cuda]
   cache: *cargo_cache
   variables:
@@ -292,6 +391,65 @@ build:macos-metal:
     expire_in: 1 month
   rules: *build_rules
 
+# Windows gets the same two backends as Linux: most Windows machines that want
+# this have an NVIDIA card, and the ones that don't still need something that
+# runs.
+build:windows-cpu:
+  stage: build
+  tags: [windows]
+  cache: *cargo_cache
+  variables:
+    ASSET_TARGET: "x86_64-windows"
+    ASSET_BACKEND: "cpu"
+  before_script:
+    - *windows_setup
+  script:
+    - cargo build --release --locked -p cranestudio
+    - .\target\release\cranestudio.exe --version
+    - .\target\release\cranestudio.exe doctor
+    - *package_windows
+  artifacts:
+    name: "cranestudio-x86_64-windows-cpu"
+    paths:
+      - dist/
+    expire_in: 1 month
+  rules: *build_rules
+
+build:windows-cuda:
+  stage: build
+  tags: [windows, cuda-windows]
+  cache: *cargo_cache
+  variables:
+    ASSET_TARGET: "x86_64-windows"
+    ASSET_BACKEND: "cuda"
+    CARGO_FEATURES: "cuda"
+  before_script:
+    - *windows_setup
+    - |
+      if (-not (Get-Command nvcc.exe -ErrorAction SilentlyContinue)) {
+        # cudarc's build script shells out to nvcc to learn the CUDA version, so
+        # the toolkit — not just the driver — has to be on this runner.
+        if ($env:CUDA_PATH -and (Test-Path "$env:CUDA_PATH\bin\nvcc.exe")) {
+          $env:PATH = "$env:CUDA_PATH\bin;$env:PATH"
+        } else {
+          throw "nvcc not found and CUDA_PATH is unset — install the CUDA toolkit on this runner"
+        }
+      }
+      nvcc --version
+  script:
+    - cargo build --release --locked -p cranestudio --features cuda
+    - .\target\release\cranestudio.exe --version
+    # Runs against the runner's own driver: a CUDA build that can't see a GPU
+    # here would ship broken, which is what this catches (§12).
+    - .\target\release\cranestudio.exe doctor
+    - *package_windows
+  artifacts:
+    name: "cranestudio-x86_64-windows-cuda"
+    paths:
+      - dist/
+    expire_in: 1 month
+  rules: *build_rules
+
 #############################################
 # Release — GitLab first, then the same
 # artifacts onto the GitHub mirror
@@ -310,6 +468,12 @@ release:gitlab:
       artifacts: true
       optional: true
     - job: build:macos-metal
+      artifacts: true
+      optional: true
+    - job: build:windows-cpu
+      artifacts: true
+      optional: true
+    - job: build:windows-cuda
       artifacts: true
       optional: true
   variables:
@@ -331,8 +495,10 @@ release:gitlab:
         echo "| download | for |"
         echo "|---|---|"
         echo "| \`…-x86_64-linux-cuda.tar.gz\` | Linux with an NVIDIA GPU (driver 525+) |"
+        echo "| \`…-x86_64-windows-cuda.zip\` | Windows with an NVIDIA GPU (driver 525+) |"
         echo "| \`…-aarch64-macos-metal.tar.gz\` | Apple Silicon Macs |"
-        echo "| \`…-x86_64-linux-cpu.tar.gz\` | anything else — works everywhere, slow on big models |"
+        echo "| \`…-x86_64-linux-cpu.tar.gz\` | Linux without a usable GPU — works everywhere, slow on big models |"
+        echo "| \`…-x86_64-windows-cpu.zip\` | Windows without a usable GPU |"
         echo
         echo "Unsure? Take the CPU build and run \`cranestudio doctor\`: it reports what the"
         echo "machine has and warns when a GPU build would find no GPU."
@@ -345,7 +511,10 @@ release:gitlab:
         echo "### Checksums"
         echo '```'
       } >> release-notes.md
-      for archive in dist/*.tar.gz; do
+      for archive in dist/*.tar.gz dist/*.zip; do
+        # Not every platform's job ran (a runner may be offline, and GPU builds
+        # are optional), so an unmatched glob is normal rather than an error.
+        [ -e "${archive}" ] || continue
         name=$(basename "${archive}")
         echo "uploading ${name}"
         curl --fail-with-body --silent --show-error \
@@ -413,7 +582,8 @@ release:github:
           -d "${BODY}" "${API}/releases" | jq -r '.id')
         echo "created GitHub release ${RELEASE_ID}"
       fi
-      for asset in dist/*.tar.gz dist/*.sha256; do
+      for asset in dist/*.tar.gz dist/*.zip dist/*.sha256; do
+        [ -e "${asset}" ] || continue
         name=$(basename "${asset}")
         echo "uploading ${name} to GitHub"
         # Replace an existing asset of the same name, so a re-run is idempotent.

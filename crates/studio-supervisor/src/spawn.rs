@@ -8,6 +8,14 @@
 //! `PR_SET_PDEATHSIG` (Linux only) is the belt-and-suspenders case: it
 //! makes the kernel itself kill a child if the daemon dies for any reason,
 //! including a `SIGKILL` the daemon never got to react to.
+//!
+//! Windows has no per-process equivalent of that hook — the equivalent
+//! mechanism is a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, which
+//! needs the Win32 API and hasn't been wired up yet. Until it is, a
+//! hard-terminated daemon on Windows can leave a child holding VRAM until the
+//! *next* daemon start, when `registry::reap_stale_children` finds it in the
+//! pidfile and kills it. Every ordinary path (quit prompt, stop, detach lease)
+//! still stops children explicitly.
 
 use std::path::PathBuf;
 use std::process::Stdio;
