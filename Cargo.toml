@@ -20,7 +20,7 @@ repository = "https://github.com/hahihula/CraneStudio"
 #   PR #100 — Qwen 3.6 / 3.8 (27B) support
 #   PR #102 — OpenAI tool calling in crane-serve
 # crane-serve = { git = "https://github.com/lucasjinreal/Crane", rev = "a3d338695f1105742a995ec2a2313b20e28f2844" }
-crane-serve = { git = "https://github.com/Hahihula/Crane", rev = "41b70560e6f71962876b508b0d6bd92b1beb8365" }
+crane-serve = { git = "https://github.com/Hahihula/Crane", rev = "5845d689e9a399259197b63d63358f1d82355dc9" }
 
 
 anyhow = "1.0"

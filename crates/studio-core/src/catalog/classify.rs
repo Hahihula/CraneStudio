@@ -30,7 +30,7 @@ pub struct ConfigJson {
     pub model_type: Option<String>,
     #[serde(default)]
     pub architectures: Vec<String>,
-    /// The singular `architecture` field; some configs (VoxCPM2) use only this.
+    /// The singular `architecture` field; some configs (`VoxCPM2`) use only this.
     pub architecture: Option<String>,
     pub vision_config: Option<serde_json::Value>,
 }

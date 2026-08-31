@@ -55,8 +55,7 @@ variables:
   # current rustup toolchain.
   RUST_IMAGE: "rust:1-bullseye"
   # §12: no GPU on a build runner, so the compute capability can't be probed.
-  # 7.5 (Turing) is the baseline; newer cards JIT the PTX forward.
-  CUDA_COMPUTE_CAP: "75"
+  CUDA_COMPUTE_CAP: "80"
 
 # Cargo's registry and the build directory, keyed by the lockfile — a cache miss
 # costs ~15 minutes of candle/crane compilation, so this matters.
@@ -341,21 +340,22 @@ build:linux-cuda:
   # A CUDA *toolkit* image, not a runtime one: cudarc's build script shells out
   # to nvcc to learn the CUDA version (`cuda-version-from-build-system`).
   #
-  # Pinned to 12.3, not the latest 12.x: candle-kernels 0.11 polyfills
-  # `__hmax_nan`/`__hmin_nan` for `__CUDA_ARCH__ < 800` (we build for sm_75), and
-  # CUDA 12.4+ added those same functions to <cuda_fp16.h> for every arch — the
-  # two collide with a "function has already been defined" nvcc error. 12.3's
-  # headers still gate them behind sm_80, so the polyfill is the only definition.
-  # The user's driver runs 12.3-built binaries forward, so nothing downstream
-  # changes. Revisit if candle's guard learns about CUDART_VERSION.
-  image: nvidia/cuda:12.3.2-devel-ubuntu22.04
+  # CUDA_COMPUTE_CAP is 80 here, not the repo-wide 75: candle-kernels 0.11
+  # polyfills `__hmax_nan`/`__hmin_nan` under `#if __CUDA_ARCH__ < 800`, and
+  # every CUDA 12.3+ toolkit already defines them unconditionally in
+  # <cuda_fp16.h>, so the two collide with "function has already been defined"
+  # for any arch below sm_80 (the image version makes no difference). Building
+  # for compute_80 skips the polyfill and the PTX still JITs forward to every
+  # Ampere-or-newer GPU; pre-Ampere (Turing/Volta) would need a patched
+  # compatibility.cuh.
+  image: nvidia/cuda:12.6.3-devel-ubuntu22.04
   tags: [cuda]
   cache: *cargo_cache
   variables:
     ASSET_TARGET: "x86_64-linux"
     ASSET_BACKEND: "cuda"
     CARGO_FEATURES: "cuda"
-    CUDA_COMPUTE_CAP: "86"
+    CUDA_COMPUTE_CAP: "80"
   before_script:
     - |
       if [ -z "${CRANESTUDIO_SHELL_RUNNER:-}" ]; then
