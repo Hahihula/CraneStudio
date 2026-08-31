@@ -1,8 +1,6 @@
 //! Mirrors the subset of `crane_serve::engine::model_factory`'s alias table
-//! relevant to `CraneStudio` v1 (PLAN.md §2.12) — the text/VL chat model
-//! families a coding agent can actually talk to. Crane also supports
-//! TTS/ASR/OCR/duplex families, but v1 has no UI for them, so they are
-//! deliberately left out here rather than mirrored and then hidden.
+//! `CraneStudio` has a UI for (PLAN.md §2.12): the text/VL chat model families,
+//! plus `VoxCPM2` for the TTS Playground (§4.7, `audio: true`).
 //!
 //! Kept independent of `crane-serve` at *runtime* — linking it would pull
 //! the whole Candle/CUDA dependency chain into `studio-core`, which is
@@ -25,6 +23,8 @@ pub struct Family {
     pub gguf_architectures: &'static [&'static str],
     pub vision: bool,
     pub gated: bool,
+    /// A speech (TTS) family rather than a text/VL chat model.
+    pub audio: bool,
 }
 
 pub const FAMILIES: &[Family] = &[
@@ -39,6 +39,7 @@ pub const FAMILIES: &[Family] = &[
         ],
         vision: false,
         gated: false,
+        audio: false,
     },
     Family {
         model_type: "qwen3_5_vl",
@@ -50,6 +51,7 @@ pub const FAMILIES: &[Family] = &[
         gguf_architectures: &[],
         vision: true,
         gated: false,
+        audio: false,
     },
     Family {
         model_type: "qwen3",
@@ -57,6 +59,7 @@ pub const FAMILIES: &[Family] = &[
         gguf_architectures: &["qwen3", "qwen3moe"],
         vision: false,
         gated: false,
+        audio: false,
     },
     Family {
         model_type: "qwen25",
@@ -64,6 +67,7 @@ pub const FAMILIES: &[Family] = &[
         gguf_architectures: &["qwen2"],
         vision: false,
         gated: false,
+        audio: false,
     },
     Family {
         model_type: "hunyuan",
@@ -74,6 +78,7 @@ pub const FAMILIES: &[Family] = &[
         gguf_architectures: &["hunyuan"],
         vision: false,
         gated: false,
+        audio: false,
     },
     Family {
         model_type: "gemma4",
@@ -82,6 +87,7 @@ pub const FAMILIES: &[Family] = &[
         vision: false,
         // Gated repo on HF (§2.12, §9).
         gated: true,
+        audio: false,
     },
     Family {
         model_type: "gemma4_vl",
@@ -89,6 +95,7 @@ pub const FAMILIES: &[Family] = &[
         gguf_architectures: &[],
         vision: true,
         gated: true,
+        audio: false,
     },
     Family {
         model_type: "minicpmv4_6",
@@ -100,6 +107,7 @@ pub const FAMILIES: &[Family] = &[
         gguf_architectures: &[],
         vision: true,
         gated: false,
+        audio: false,
     },
     Family {
         model_type: "minicpm5",
@@ -122,8 +130,27 @@ pub const FAMILIES: &[Family] = &[
         gguf_architectures: &[],
         vision: false,
         gated: false,
+        audio: false,
+    },
+    Family {
+        // VoxCPM2 TTS (§2.16). Aliases mirror `ModelType::from_str`.
+        model_type: "voxcpm2",
+        config_aliases: &["voxcpm2", "voxcpm-2", "voxcpm_2", "voxcpm"],
+        // safetensors only.
+        gguf_architectures: &[],
+        vision: false,
+        gated: false,
+        audio: true,
     },
 ];
+
+/// Whether `model_type` names a speech family.
+#[must_use]
+pub fn is_audio_model_type(model_type: &str) -> bool {
+    FAMILIES
+        .iter()
+        .any(|f| f.model_type == model_type && f.audio)
+}
 
 /// Path-name fallback for the one family whose real content (`config.json`
 /// or GGUF header) is genuinely indistinguishable from an unsupported
@@ -267,6 +294,16 @@ mod tests {
         let vl = from_config(Some("minicpmv4_6"), &[], true).unwrap();
         assert_eq!(vl.model_type, "minicpmv4_6");
         assert!(from_config(Some("minicpmv4_6"), &[], false).is_none());
+    }
+
+    #[test]
+    fn voxcpm2_is_a_supported_audio_family() {
+        let family = from_config(Some("voxcpm2"), &[], false).unwrap();
+        assert_eq!(family.model_type, "voxcpm2");
+        assert!(family.audio);
+        assert!(!family.vision);
+        assert!(super::is_audio_model_type("voxcpm2"));
+        assert!(!super::is_audio_model_type("qwen3_5"));
     }
 
     #[test]

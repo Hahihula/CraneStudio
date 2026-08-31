@@ -36,7 +36,7 @@ struct StudioApp {
     available: bool,
 }
 
-const APPS: [StudioApp; 4] = [
+const CHAT_APPS: [StudioApp; 4] = [
     StudioApp {
         key: "chat",
         name: "Chat",
@@ -63,6 +63,26 @@ const APPS: [StudioApp; 4] = [
     },
 ];
 
+/// Ready-screen apps for a speech model (no Chat).
+const TTS_APPS: [StudioApp; 2] = [
+    StudioApp {
+        key: "tts",
+        name: "TTS Playground",
+        blurb: "type text, generate speech, play it back",
+        available: true,
+    },
+    StudioApp {
+        key: "endpoint",
+        name: "Endpoint",
+        blurb: "connect an external client to this model",
+        available: true,
+    },
+];
+
+fn apps(is_tts: bool) -> &'static [StudioApp] {
+    if is_tts { &TTS_APPS } else { &CHAT_APPS }
+}
+
 #[derive(Default)]
 pub struct State {
     pub id: Option<u64>,
@@ -73,6 +93,8 @@ pub struct State {
     pub context: Option<usize>,
     /// True between "launch requested" and the daemon reporting an id.
     pub starting: bool,
+    /// Speech model; selects the app list and endpoint example.
+    pub is_tts: bool,
     pub selected: usize,
     /// The endpoint app is a panel on this screen rather than a screen of its
     /// own — it's four lines of copy-paste, not a place to navigate to.
@@ -82,21 +104,32 @@ pub struct State {
 impl State {
     /// Called the moment a launch is requested, so the screen can show what's
     /// starting before the daemon has assigned it an id.
-    pub fn begin(&mut self, name: String, port: u16, gateway_port: u16) {
+    pub fn begin(&mut self, name: String, port: u16, gateway_port: u16, is_tts: bool) {
         self.id = None;
         self.name = name;
         self.port = port;
         self.gateway_port = gateway_port;
         self.starting = true;
+        self.is_tts = is_tts;
         self.context = None;
+        self.selected = 0;
     }
 
-    pub fn set_active(&mut self, id: u64, name: String, port: u16, gateway_port: u16) {
+    pub fn set_active(
+        &mut self,
+        id: u64,
+        name: String,
+        port: u16,
+        gateway_port: u16,
+        is_tts: bool,
+    ) {
         self.id = Some(id);
         self.name = name;
         self.port = port;
         self.gateway_port = gateway_port;
         self.starting = false;
+        self.is_tts = is_tts;
+        self.selected = self.selected.min(apps(is_tts).len() - 1);
     }
 }
 
@@ -108,7 +141,7 @@ pub fn handle_key(app: &mut TuiApp, key: KeyEvent) -> bool {
             true
         }
         KeyCode::Down | KeyCode::Char('j') => {
-            app.ready.selected = (app.ready.selected + 1).min(APPS.len() - 1);
+            app.ready.selected = (app.ready.selected + 1).min(apps(app.ready.is_tts).len() - 1);
             true
         }
         KeyCode::Up | KeyCode::Char('k') => {
@@ -124,7 +157,7 @@ pub fn handle_key(app: &mut TuiApp, key: KeyEvent) -> bool {
 }
 
 fn open_selected(app: &mut TuiApp) {
-    let Some(entry) = APPS.get(app.ready.selected) else {
+    let Some(entry) = apps(app.ready.is_tts).get(app.ready.selected) else {
         return;
     };
     if !entry.available {
@@ -134,6 +167,7 @@ fn open_selected(app: &mut TuiApp) {
     app.message = None;
     match entry.key {
         "chat" => app.screen = Screen::Chat,
+        "tts" => app.screen = Screen::TtsPlayground,
         "endpoint" => app.ready.show_endpoint = !app.ready.show_endpoint,
         _ => {}
     }
@@ -150,7 +184,7 @@ pub fn render(app: &mut TuiApp, frame: &mut Frame) {
     // left blank — a half-empty bordered box reads as something missing.
     let endpoint_height = if app.ready.show_endpoint { 8 } else { 0 };
     #[allow(clippy::cast_possible_truncation)]
-    let apps_height = (APPS.len() * 2) as u16 + 2;
+    let apps_height = (apps(app.ready.is_tts).len() * 2) as u16 + 2;
     let [status_area, endpoint_area, apps_area, _] = Layout::vertical([
         Constraint::Length(7),
         Constraint::Length(endpoint_height),
@@ -232,6 +266,17 @@ fn render_endpoint(app: &TuiApp, frame: &mut Frame, area: Rect) {
     frame.render_widget(block, area);
 
     let base = format!("http://127.0.0.1:{}/v1", app.ready.gateway_port);
+    let example = if app.ready.is_tts {
+        format!(
+            "curl {base}/audio/speech -d '{{\"model\":\"{}\",\"input\":\"hello\"}}' --output speech.wav",
+            app.ready.name
+        )
+    } else {
+        format!(
+            "curl {base}/chat/completions -d '{{\"model\":\"{}\",\"messages\":[…]}}'",
+            app.ready.name
+        )
+    };
     let lines = vec![
         Line::from(Span::styled(
             "point any OpenAI-compatible client at this — it survives switching models",
@@ -242,13 +287,7 @@ fn render_endpoint(app: &TuiApp, frame: &mut Frame, area: Rect) {
         ui::field(&app.theme, "OPENAI_API_KEY", "not required"),
         Line::raw(""),
         Line::from(Span::styled(
-            crate::ui::text::truncate(
-                &format!(
-                    "curl {base}/chat/completions -d '{{\"model\":\"{}\",\"messages\":[…]}}'",
-                    app.ready.name
-                ),
-                inner.width as usize,
-            ),
+            crate::ui::text::truncate(&example, inner.width as usize),
             Style::new().fg(app.theme.accent_alt),
         )),
     ];
@@ -260,7 +299,7 @@ fn render_apps(app: &TuiApp, frame: &mut Frame, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let items: Vec<ListItem> = APPS
+    let items: Vec<ListItem> = apps(app.ready.is_tts)
         .iter()
         .enumerate()
         .map(|(i, entry)| app_item(&app.theme, entry, i == app.ready.selected, inner.width))

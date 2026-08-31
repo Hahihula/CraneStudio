@@ -80,12 +80,14 @@ fn render_classification(classification: &Classification, out: &mut String) {
             model_type,
             vision,
             gated,
+            audio,
         } => {
             let vision = if *vision { ", vision" } else { "" };
             let gated = if *gated { ", gated" } else { "" };
+            let audio = if *audio { ", audio" } else { "" };
             let _ = writeln!(
                 out,
-                "  \u{25cf} supported — model_type: {model_type}{vision}{gated}"
+                "  \u{25cf} supported — model_type: {model_type}{vision}{gated}{audio}"
             );
         }
         Classification::Unsupported { reason, .. } => {

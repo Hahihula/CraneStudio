@@ -17,7 +17,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use studio_core::catalog::Classification;
 use studio_core::catalog::local::LocalCandidate;
-use studio_core::catalog::schema::{Format, ModelEntry};
+use studio_core::catalog::schema::{ExtraRepo, Format, ModelEntry};
 use studio_core::download::{CancellationToken, Event, RepoDownload, download_repo};
 
 use crate::app::{App, BackgroundEvent, Screen};
@@ -191,6 +191,7 @@ pub fn start_catalog(app: &mut App, model: &ModelEntry) {
         variant.repo.clone(),
         variant.revision.clone(),
         variant.files.clone(),
+        variant.extra_repos.clone(),
         // Trust the catalog's own verified model_type directly rather than
         // re-classifying the download afterward — some families (MiniCPM5) are
         // deliberately never auto-detected at all (their config/GGUF header is
@@ -214,6 +215,7 @@ pub fn start_hf(app: &mut App, repo_id: &str, gguf_file: &str) {
         repo_id.to_string(),
         "main".to_string(),
         vec![gguf_file.to_string()],
+        Vec::new(),
         None,
     );
 }
@@ -241,6 +243,7 @@ fn known_candidate(
             model_type: family.model_type,
             vision: family.vision,
             gated: family.gated,
+            audio: family.audio,
         },
     })
 }
@@ -251,6 +254,7 @@ fn start(
     repo: String,
     revision: String,
     files: Vec<String>,
+    extra_repos: Vec<ExtraRepo>,
     known: Option<(String, Format)>,
 ) {
     let cancel = CancellationToken::new();
@@ -282,7 +286,22 @@ fn start(
             }
         });
 
-        let result = download_repo(&client, &request, &files, &event_tx, &cancel).await;
+        let mut result = download_repo(&client, &request, &files, &event_tx, &cancel).await;
+
+        // Secondary repos merged into the same directory.
+        if result.is_ok() {
+            for extra in &extra_repos {
+                let mut req =
+                    RepoDownload::new(extra.repo.clone(), extra.revision.clone(), dest_dir.clone());
+                req.token = request.token.clone();
+                if let Err(e) = download_repo(&client, &req, &extra.files, &event_tx, &cancel).await
+                {
+                    result = Err(e);
+                    break;
+                }
+            }
+        }
+
         drop(event_tx);
         let _ = forwarder.await;
 

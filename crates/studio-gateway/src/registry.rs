@@ -79,6 +79,17 @@ impl ModelRegistry {
         Some(entry.port)
     }
 
+    /// The id of the child currently serving `name`, if one is running.
+    #[must_use]
+    pub fn running_child_id(&self, name: &str) -> Option<ChildId> {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .running
+            .get(name)
+            .map(|entry| entry.child_id)
+    }
+
     pub fn mark_running(&self, name: String, child_id: ChildId, port: u16) {
         self.inner
             .lock()

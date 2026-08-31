@@ -303,39 +303,83 @@ fn attempt_launch(app: &mut App) {
     // GPU takes tens of seconds, and that wait is exactly what that screen is
     // for.
     let label = app.wizard.variant_label.clone();
-    app.ready.begin(label.clone(), port, app.gateway_port);
+    app.ready
+        .begin(label.clone(), port, app.gateway_port, false);
     app.ready.context = Some(config.context);
     app.screen = Screen::Ready;
     app.message = None;
-    spawn_launch(app, spec, label, measurement_key, predicted_bytes);
+    spawn_launch(
+        app,
+        spec,
+        label,
+        false,
+        Some((measurement_key, predicted_bytes)),
+    );
+}
+
+/// Launches a speech model directly, skipping the VRAM solver and the wizard.
+pub fn launch_tts(app: &mut App, model: &LocalModel) {
+    let Some(model_type) = model.model_type.clone() else {
+        app.message = Some(Message::error(
+            "this model isn't a Crane-supported architecture",
+        ));
+        return;
+    };
+
+    let name = model
+        .path()
+        .file_name()
+        .map_or_else(|| model.name.clone(), |n| n.to_string_lossy().to_string());
+
+    let (_, device) = usable_memory(app);
+    let preferred_port = 41100 + u16::try_from(app.last_running.len()).unwrap_or(0);
+    let port = studio_core::launch::pick_free_port(preferred_port, 50);
+
+    let spec = LaunchSpec {
+        model_path: model.path().to_string_lossy().to_string(),
+        model_type,
+        model_name: Some(name.clone()),
+        port,
+        cpu: matches!(app.hardware.backend, Backend::Cpu),
+        max_concurrent: 1,
+        decode_tokens_per_seq: 16,
+        format: None,
+        quant: None,
+        dtype: None,
+        max_seq_len: 0,
+        gpu_memory_limit: None,
+        text_only: false,
+        kv_quant: None,
+        prefill_chunk: None,
+        device,
+    };
+
+    app.ready.begin(name.clone(), port, app.gateway_port, true);
+    app.ready.context = None;
+    app.screen = Screen::Ready;
+    app.message = None;
+    spawn_launch(app, spec, name, true, None);
 }
 
 fn spawn_launch(
     app: &App,
     spec: LaunchSpec,
     name: String,
-    measurement_key: String,
-    predicted_bytes: u64,
+    is_tts: bool,
+    measured: Option<(String, u64)>,
 ) {
     let tx = app.sender();
     let control_base = app.control_base();
     let gateway_base = app.gateway_base();
     tokio::spawn(async move {
-        let outcome = do_launch(
-            &control_base,
-            &gateway_base,
-            &spec,
-            &name,
-            &measurement_key,
-            predicted_bytes,
-        )
-        .await;
+        let outcome = do_launch(&control_base, &gateway_base, &spec, &name, measured).await;
         match outcome {
             Ok(id) => {
                 let _ = tx.send(BackgroundEvent::Launched {
                     id,
                     name,
                     port: spec.port,
+                    is_tts,
                 });
             }
             Err(e) => {
@@ -350,8 +394,7 @@ async fn do_launch(
     gateway_base: &str,
     spec: &LaunchSpec,
     name: &str,
-    measurement_key: &str,
-    predicted_bytes: u64,
+    measured: Option<(String, u64)>,
 ) -> Result<u64, String> {
     let client = reqwest::Client::new();
 
@@ -368,9 +411,15 @@ async fn do_launch(
         ));
     }
 
+    // Only a solver-led launch carries a measurement key + prediction.
+    let mut launch_body = serde_json::json!({"spec": spec, "label": name});
+    if let Some((key, predicted_bytes)) = measured {
+        launch_body["measurement_key"] = serde_json::json!(key);
+        launch_body["predicted_bytes"] = serde_json::json!(predicted_bytes);
+    }
     let launch = client
         .post(format!("{control_base}/control/launch"))
-        .json(&serde_json::json!({"spec": spec, "label": name, "measurement_key": measurement_key, "predicted_bytes": predicted_bytes}))
+        .json(&launch_body)
         .send()
         .await
         .map_err(|e| e.to_string())?;

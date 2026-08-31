@@ -398,9 +398,10 @@ main contains `minicpm5`, `minicpm_v`, `minicpmo`, and `voxcpm2`, and
 (`"voxcpm2" | "voxcpm-2" | "voxcpm_2" | "voxcpm"`, `"minicpm5"`, `"minicpmv46"`,
 `"minicpmo"`).
 
-Good news for the post-v1 "specialised model apps" phase — VoxCPM2 needs no
-branch merge. Note `/v1/audio/duplex` is still guarded by an exclusivity mutex:
-one live session at a time.
+VoxCPM2 needs no branch merge — it's wired up as the **TTS Playground** app
+(§4.7), driving `POST /v1/audio/speech`. Note `/v1/audio/duplex` is still
+guarded by an exclusivity mutex (one live session at a time) — relevant if a
+duplex app is added later.
 
 **General lesson: `AGENTS.md` is a useful map but it is not authoritative. Check
 the tree.**
@@ -512,6 +513,21 @@ asserting the children are gone within the grace period.
   if it is `SIGKILL`'d.
 - On startup, the daemon scans for stale `__serve` processes from a previous
   crashed run (recorded in a pidfile) and reaps them, reporting what it cleaned.
+
+**Per-platform status of those nets** (the guarantee itself is not
+platform-specific, but the mechanisms are):
+
+| | stop / detach-lease shutdown | dies with a `kill -9`'d daemon | reaps a previous run's strays |
+|---|---|---|---|
+| Linux | `SIGTERM` → `SIGKILL` | yes, `PR_SET_PDEATHSIG` | yes, guarded by `/proc/<pid>/cmdline` |
+| Windows | `taskkill /T /F` — Windows has no signal that means "please exit" for another console process, and a crane-serve child holds nothing unsaved | **no** — needs a Job Object with `KILL_ON_JOB_CLOSE`, not yet wired up | yes, guarded by the pid's WMI command line |
+| macOS | `SIGTERM` → `SIGKILL` | no per-process hook exists | **no** — no `/proc`; needs a `libproc` lookup |
+
+The two gaps are both "a hard-killed daemon can leave a child until the next
+start", never "a child is left silently forever": every ordinary exit path stops
+children explicitly, and on Windows the next daemon start reaps what a crash
+left. Closing them (Job Object on Windows, `proc_pidpath` on macOS) is tracked
+work, not an accepted permanent state.
 
 `cranestudio stop` shuts down a detached daemon. `cranestudio status` reports
 what is running and whether it is detached — a user must always be able to find
@@ -729,6 +745,42 @@ token-rate readout, and a "clear" action. Render `reasoning_content` (§2.14,
 Crane separates the `<think>` scratchpad out of `content`) in a dimmed collapsed
 block. **Do not** build a markdown renderer, syntax highlighting, or
 conversation persistence in v1.
+
+### 4.7 TTS Playground
+
+The second studio app, and the first for a non-chat family: for a speech model
+(VoxCPM2, §2.16) the ready screen offers **TTS Playground** in place of Chat.
+Type text, generate, play the clip back in-process (`rodio` — CoreAudio /
+WASAPI / ALSA; a headless box with no device still saves the file and shows its
+path). Every clip is written to `<data_dir>/tts/<text-slug>-<ts>.wav` and stays
+listed for replay.
+
+Contract: `POST {gateway}/v1/audio/speech` with `{"model", "input",
+"response_format": "wav", "max_tokens"}`. Unlike `/chat/completions` this is a
+**single non-streaming response** — Crane synthesises the whole clip then
+returns WAV bytes — so there is no token/percentage signal; "progress" is a
+spinner plus an elapsed-seconds counter.
+
+Deliberately text-only in v1: Crane's VoxCPM2 adapter
+(`crane/src/audio/tts_voxcpm2.rs`) ignores `language`, `temperature` and
+`top_p` on this endpoint (it reads only the length cap), and the model infers
+language from the text. A `max_len` of 2000 (VoxCPM2's own default) is sent
+under the hood so a runaway generation still stops. Language / sampling
+controls are a follow-up gated on a crane-serve change to pass those through;
+the request-building code in `screens::tts` is the only place they'd land.
+
+Speech models skip the VRAM solver entirely (`screens::wizard::launch_tts`):
+their `config.json` carries no transformer dimensions the estimator reads, and
+a TTS model has no context/KV knobs to choose between. `--model-type auto`
+detects VoxCPM2 from the singular `architecture` field; `--max-seq-len 0`.
+
+**`^r` (restart voice):** crane-serve never reseeds candle's RNG, so a
+long-lived VoxCPM2 child can settle into a run of poor flow-matching noise
+draws that re-submitting doesn't escape. `^r` POSTs `{gateway}/restart` which
+stops the child and drops the running mapping (the model stays registered);
+the next generate spawns a fresh process. Proper fix is upstream —
+`Device::set_seed` per request, or a `seed` field on `SpeechRequest` — at
+which point this becomes a real reseed instead of a process bounce.
 
 ---
 
@@ -1452,18 +1504,25 @@ attempts to emulate it in studio code.
 
 ## 12. Release pipeline
 
-`.github/workflows/release.yml`, triggered on tags.
+`.gitlab-ci.yml`, triggered on tags — GitLab is the primary repository, and the
+pipeline also mirrors the source and the built archives to GitHub Releases, so
+users who arrive at the mirror get the same binaries. The point of building in CI
+rather than by hand is transparency: every published archive is produced from a
+tagged commit by a job whose log is public, and carries a `BUILD-PROVENANCE.txt`
+naming that commit, the toolchain and the pinned Crane revision.
 
 **v1 matrix:**
 
-| Target | Runner | Features | Notes |
+| Target | Runner (tag) | Features | Notes |
 |---|---|---|---|
-| `x86_64-unknown-linux-gnu` + CUDA | `ubuntu-latest` + CUDA toolkit | `cuda` | Set `CUDA_COMPUTE_CAP` explicitly (no GPU on the runner). Build for a baseline cap; PTX JITs forward. Consider `CUDA_COMPUTE_CAP=75` for wider reach. |
-| `aarch64-apple-darwin` + Metal | `macos-latest` | `metal,accelerate` | |
+| `x86_64-unknown-linux-gnu` CPU-only | `docker` | *(none)* | Always builds, runs anywhere. The universal fallback, and what someone unsure of their hardware should download first. |
+| `x86_64-unknown-linux-gnu` + CUDA | `cuda` — Linux with the CUDA toolkit | `cuda` | Set `CUDA_COMPUTE_CAP` explicitly rather than probing (`75`, Turing, as the baseline; PTX JITs forward). A CUDA *devel* image is required: cudarc's build script needs `nvcc` to learn the CUDA version. |
+| `aarch64-apple-darwin` + Metal | `macos`,`metal` — Apple Silicon shell executor | `metal,accelerate` | macOS can't run docker images, so this job is shell-only and keeps its toolchain on the host. |
+| `x86_64-pc-windows-msvc` CPU-only | `windows` — PowerShell shell executor | *(none)* | Ships as `.zip`, not `.tar.gz`. Needs the MSVC build tools **and NASM**: `reqwest` → `rustls` → aws-lc builds assembly, and crane-serve enables the same stack, so it can't be dropped from our side. |
+| `x86_64-pc-windows-msvc` + CUDA | `windows`,`cuda-windows` | `cuda` | As above plus the Windows CUDA toolkit; `nvcc` must be on `PATH` or reachable through `CUDA_PATH`. |
 
 **Planned, not in v1 — but keep the doors open (§13):**
 
-| `x86_64-unknown-linux-gnu` CPU-only | `ubuntu-latest` | *(none)* | Always builds. Ship as the universal fallback. |
 | `x86_64-unknown-linux-gnu` + ROCm | — | `rocm` | Blocked on §2.5. |
 
 Requirements:
@@ -1604,10 +1663,11 @@ multi-turn tool-using task. Fully testable against a mock backend without a GPU 
 build it that way.
 
 ### Post-v1 (not planned in detail here)
-GUI over the same control API; per-model "apps" (VoxCPM2 et al. — already on
-upstream main, §2.16, so unblocked); TTS/ASR/OCR model types; CPU-only and ROCm
-targets (§13); multi-GPU once
-Crane supports it (§2.6); opt-in community measurement sharing.
+GUI over the same control API; more per-model "apps" (VoxCPM2's **TTS
+Playground** shipped — §4.7; benchmark and agent-tool apps next); ASR/OCR model
+types; language / sampling controls for TTS once crane-serve passes them
+through; reference-audio voice cloning; CPU-only and ROCm targets (§13);
+multi-GPU once Crane supports it (§2.6); opt-in community measurement sharing.
 
 ---
 

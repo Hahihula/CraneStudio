@@ -14,7 +14,13 @@ anyhow.workspace = true
 base64 = "0.23.1"
 crossterm = { version = "0.29.0", features = ["event-stream"] }
 futures-util = "0.3.34"
+hound = "3.5"
 ratatui = "0.30.2"
+# In-process playback for the TTS Playground (§4.7). `wav` only — the generated
+# clips are WAV; keeps the dep surface (and the codec crates) minimal. cpal is
+# non-optional, so this always links an audio backend: CoreAudio (macOS) / WASAPI
+# (Windows) need nothing extra, Linux needs libasound2 (ALSA) — see .gitlab-ci.yml.
+rodio = { version = "0.20.1", default-features = false, features = ["wav"] }
 reqwest = { version = "0.13.4", features = ["json"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

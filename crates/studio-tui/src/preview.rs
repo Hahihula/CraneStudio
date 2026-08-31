@@ -97,6 +97,7 @@ fn local(
                     model_type: "qwen3_5",
                     vision: false,
                     gated: false,
+                    audio: false,
                 }
             } else {
                 Classification::Unsupported {
@@ -110,6 +111,7 @@ fn local(
         quant: quant.map(str::to_string),
         size,
         supported,
+        audio: false,
         model_type: supported.then(|| model_type.to_string()),
         reason: (!supported).then(|| "phi3 is not a Crane-supported architecture".to_string()),
     }
@@ -294,8 +296,13 @@ fn preview_launch_options() {
 fn preview_ready_and_apps() {
     let mut app = populated();
     app.screen = Screen::Ready;
-    app.ready
-        .set_active(1, "Qwen3.5-9B-Instruct-Q4_K_M".to_string(), 41100, 1234);
+    app.ready.set_active(
+        1,
+        "Qwen3.5-9B-Instruct-Q4_K_M".to_string(),
+        41100,
+        1234,
+        false,
+    );
     app.ready.context = Some(262_144);
     show("ready — apps", 120, 30, &mut app);
 
@@ -303,11 +310,18 @@ fn preview_ready_and_apps() {
     app.ready.selected = 1;
     show("ready — endpoint open", 120, 34, &mut app);
 
+    let mut tts = populated();
+    tts.screen = Screen::Ready;
+    tts.ready
+        .set_active(2, "VoxCPM2".to_string(), 41101, 1234, true);
+    tts.ready.show_endpoint = true;
+    show("ready — TTS model apps", 120, 30, &mut tts);
+
     let mut starting = populated();
     starting.screen = Screen::Ready;
     starting
         .ready
-        .begin("Qwen3.5-9B-Instruct-Q4_K_M".to_string(), 41100, 1234);
+        .begin("Qwen3.5-9B-Instruct-Q4_K_M".to_string(), 41100, 1234, false);
     show("ready — still loading", 100, 26, &mut starting);
 }
 
@@ -315,8 +329,13 @@ fn preview_ready_and_apps() {
 fn preview_chat() {
     let mut app = populated();
     app.screen = Screen::Chat;
-    app.ready
-        .set_active(1, "Qwen3.5-9B-Instruct-Q4_K_M".to_string(), 41100, 1234);
+    app.ready.set_active(
+        1,
+        "Qwen3.5-9B-Instruct-Q4_K_M".to_string(),
+        41100,
+        1234,
+        false,
+    );
     show("chat — empty", 100, 26, &mut app);
 
     app.chat.messages = vec![
@@ -333,6 +352,46 @@ fn preview_chat() {
     app.chat.active_image = Some(std::path::PathBuf::from("/home/dev/pictures/chart.png"));
     show("chat — mid conversation", 100, 28, &mut app);
     show("chat — 80×24", 80, 24, &mut app);
+}
+
+#[test]
+fn preview_tts() {
+    let mut app = populated();
+    app.screen = Screen::TtsPlayground;
+    app.ready
+        .set_active(2, "VoxCPM2".to_string(), 41101, 1234, true);
+    show("tts — empty", 100, 26, &mut app);
+
+    app.tts.clips = vec![
+        screens::tts::Clip {
+            text: "Welcome to CraneStudio — local models, one binary.".to_string(),
+            wav_path: std::path::PathBuf::from(
+                "/home/dev/.local/share/cranestudio/tts/Welcome-to-CraneStudio-1756600000.wav",
+            ),
+            sample_rate: 24_000,
+            bytes: 480_044,
+            duration_secs: 3.4,
+            gen_secs: 5.1,
+        },
+        screens::tts::Clip {
+            text: "The second clip is a little shorter.".to_string(),
+            wav_path: std::path::PathBuf::from(
+                "/home/dev/.local/share/cranestudio/tts/The-second-clip-1756600042.wav",
+            ),
+            sample_rate: 24_000,
+            bytes: 264_044,
+            duration_secs: 2.1,
+            gen_secs: 3.3,
+        },
+    ];
+    app.tts.selected = 1;
+    app.tts.now_playing = Some(1);
+    show("tts — clips", 100, 28, &mut app);
+
+    app.tts.now_playing = None;
+    app.tts.generating = true;
+    app.tts.input.clear();
+    show("tts — generating", 90, 24, &mut app);
 }
 
 #[test]
@@ -383,6 +442,7 @@ fn every_screen_survives_extreme_sizes() {
         Screen::Wizard,
         Screen::Ready,
         Screen::Chat,
+        Screen::TtsPlayground,
     ];
     for screen in screens {
         for (width, height) in [(20, 5), (40, 10), (80, 24), (100, 30), (250, 80)] {

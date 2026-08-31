@@ -124,26 +124,46 @@ fn activate(app: &mut App) {
             if let Some(child) = app.last_running.get(index) {
                 let port = app.known_ports.get(&child.info.id).copied().unwrap_or(0);
                 let (id, label) = (child.info.id, child.info.label.clone());
-                app.ready.set_active(id, label, port, app.gateway_port);
+                let is_tts = app
+                    .child_is_tts
+                    .get(&id)
+                    .copied()
+                    .unwrap_or_else(|| label_looks_like_tts(&label));
+                app.ready
+                    .set_active(id, label, port, app.gateway_port, is_tts);
                 app.screen = Screen::Ready;
             }
         }
         Some(Row::Local(index)) => {
             if let Some(model) = app.local_models.get(index).cloned() {
-                crate::screens::wizard::quick_launch(app, &model);
+                if model.audio {
+                    crate::screens::wizard::launch_tts(app, &model);
+                } else {
+                    crate::screens::wizard::quick_launch(app, &model);
+                }
             }
         }
         Some(Row::Browse) | None => app.screen = Screen::Browser,
     }
 }
 
-/// `c`: the same launch, but stopping at the wizard so the solver's
-/// alternatives can be inspected and overridden first (§4.4).
+/// Fallback guess of whether a running model is TTS, from its label.
+fn label_looks_like_tts(label: &str) -> bool {
+    let l = label.to_lowercase();
+    l.contains("voxcpm") || l.contains("-tts") || l.contains("_tts")
+}
+
+/// `c`: like `Enter` but stopping at the wizard to inspect the solver's
+/// alternatives first (§4.4). Speech models have none, so `c` launches directly.
 fn configure(app: &mut App) {
     app.message = None;
     match selected_row(app) {
         Some(Row::Local(index)) => {
             if let Some(model) = app.local_models.get(index).cloned() {
+                if model.audio {
+                    crate::screens::wizard::launch_tts(app, &model);
+                    return;
+                }
                 crate::screens::wizard::load_local(app, &model.candidate);
                 app.screen = Screen::Wizard;
             }

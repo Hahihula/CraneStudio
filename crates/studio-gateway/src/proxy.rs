@@ -29,6 +29,7 @@ pub fn router() -> Router<std::sync::Arc<GatewayState>> {
     Router::new()
         .route("/v1/models", get(list_models))
         .route("/register", post(register))
+        .route("/restart", post(restart))
         .fallback(proxy)
 }
 
@@ -36,6 +37,24 @@ pub fn router() -> Router<std::sync::Arc<GatewayState>> {
 struct RegisterRequest {
     name: String,
     spec: LaunchSpec,
+}
+
+#[derive(Deserialize)]
+struct RestartRequest {
+    name: String,
+}
+
+/// Stops the child currently serving `name`, if any, so the next request for it
+/// spawns a fresh process. The model stays registered. Idempotent.
+async fn restart(
+    State(state): State<std::sync::Arc<GatewayState>>,
+    Json(req): Json<RestartRequest>,
+) -> StatusCode {
+    if let Some(child_id) = state.registry.running_child_id(&req.name) {
+        state.daemon.supervisor().stop(child_id).await;
+        state.registry.forget_running(&req.name);
+    }
+    StatusCode::OK
 }
 
 /// Adds a model to the gateway's aggregate `/v1/models` list and makes it
@@ -319,6 +338,20 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
         assert!(resp.text().await.unwrap().contains("unknown model"));
+    }
+
+    #[tokio::test]
+    async fn restart_is_idempotent_when_nothing_is_running() {
+        let state = test_state();
+        state.registry.register("m".to_string(), spec("m", 0));
+        let addr = spawn_gateway(state).await;
+        let resp = reqwest::Client::new()
+            .post(format!("http://{addr}/restart"))
+            .json(&serde_json::json!({"name": "m"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[tokio::test]

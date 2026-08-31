@@ -64,7 +64,8 @@ fn walk(dir: &Path, depth: usize, out: &mut Vec<LocalCandidate>) {
             continue;
         };
 
-        if file_type.is_dir() {
+        // Follow symlinked directories too; MAX_DEPTH bounds any cycle.
+        if file_type.is_dir() || (file_type.is_symlink() && path.is_dir()) {
             if entry.file_name().to_string_lossy().starts_with('.') {
                 continue;
             }

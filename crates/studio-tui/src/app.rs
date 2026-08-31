@@ -55,6 +55,7 @@ pub enum Screen {
     Wizard,
     Ready,
     Chat,
+    TtsPlayground,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +91,7 @@ pub enum BackgroundEvent {
         id: u64,
         name: String,
         port: u16,
+        is_tts: bool,
     },
     LaunchFailed(String),
     StatusRefresh(Vec<ChildSummary>),
@@ -100,6 +102,8 @@ pub enum BackgroundEvent {
     },
     ChatDone,
     ChatError(String),
+    TtsGenerated(Box<screens::tts::Clip>),
+    TtsError(String),
 }
 
 /// Rolling utilization history, 0–1 per sample, oldest first.
@@ -159,6 +163,7 @@ pub struct App {
     pub wizard: screens::wizard::State,
     pub ready: screens::ready::State,
     pub chat: screens::chat::State,
+    pub tts: screens::tts::State,
 
     /// Models found on disk, with their sizes and quantization labels.
     pub local_models: Vec<LocalModel>,
@@ -171,6 +176,8 @@ pub struct App {
     pub message: Option<Message>,
     pub last_running: Vec<ChildSummary>,
     pub known_ports: HashMap<u64, u16>,
+    /// Which running children are speech models, by id.
+    pub child_is_tts: HashMap<u64, bool>,
     /// Cycled with `F2`, remembered in `config.ron`.
     pub theme: Theme,
     /// Incremented every tick — drives spinners and the live meters.
@@ -219,6 +226,7 @@ impl App {
                 config.max_tokens,
                 config.temperature,
             ),
+            tts: screens::tts::State::default(),
             local_models: Vec::new(),
             local_scan_done: false,
             hardware_scroll: 0,
@@ -227,6 +235,7 @@ impl App {
             message: None,
             last_running: Vec::new(),
             known_ports: HashMap::new(),
+            child_is_tts: HashMap::new(),
             theme: Theme::from_name(config.theme),
             tick: 0,
             started: Instant::now(),
@@ -430,13 +439,32 @@ impl App {
                 // Straight into the launch options for what was just fetched:
                 // downloading a model is only ever a step towards running it.
                 self.rescan_models();
-                screens::wizard::load_local(self, &candidate);
-                self.screen = Screen::Wizard;
+                let is_audio = matches!(
+                    candidate.classification,
+                    studio_core::catalog::Classification::Supported { audio: true, .. }
+                );
+                if is_audio {
+                    // Speech models have no launch options; launch from the launchpad.
+                    self.screen = Screen::Launchpad;
+                    self.message = Some(Message::info(
+                        "downloaded — select it and press Enter to launch the TTS Playground",
+                    ));
+                } else {
+                    screens::wizard::load_local(self, &candidate);
+                    self.screen = Screen::Wizard;
+                }
             }
             BackgroundEvent::DownloadFailed(err) => self.download.error = Some(err),
-            BackgroundEvent::Launched { id, name, port } => {
+            BackgroundEvent::Launched {
+                id,
+                name,
+                port,
+                is_tts,
+            } => {
                 self.known_ports.insert(id, port);
-                self.ready.set_active(id, name, port, self.gateway_port);
+                self.child_is_tts.insert(id, is_tts);
+                self.ready
+                    .set_active(id, name, port, self.gateway_port, is_tts);
                 self.screen = Screen::Ready;
             }
             BackgroundEvent::LaunchFailed(err) => {
@@ -453,6 +481,11 @@ impl App {
             }
             BackgroundEvent::ChatDone => self.chat.finish_turn(),
             BackgroundEvent::ChatError(err) => self.chat.fail_turn(&err),
+            BackgroundEvent::TtsGenerated(clip) => {
+                self.tts.on_generated(*clip);
+                self.tts.play_latest();
+            }
+            BackgroundEvent::TtsError(err) => self.tts.fail(&err),
         }
     }
 
@@ -480,6 +513,7 @@ impl App {
             Screen::Wizard => screens::wizard::handle_key(self, key),
             Screen::Ready => screens::ready::handle_key(self, key),
             Screen::Chat => screens::chat::handle_key(self, key),
+            Screen::TtsPlayground => screens::tts::handle_key(self, key),
             Screen::Hardware => self.handle_hardware_key(key),
             Screen::Splash => false,
         };
@@ -556,6 +590,7 @@ impl App {
             Screen::Wizard => screens::wizard::render(self, frame),
             Screen::Ready => screens::ready::render(self, frame),
             Screen::Chat => screens::chat::render(self, frame),
+            Screen::TtsPlayground => screens::tts::render(self, frame),
         }
         if let Some(choice) = self.quit_prompt {
             screens::quit_prompt::render(frame, &self.theme, choice, &self.last_running);
@@ -611,6 +646,7 @@ impl App {
             wizard: screens::wizard::State::default(),
             ready: screens::ready::State::default(),
             chat: screens::chat::State::default(),
+            tts: screens::tts::State::default(),
             local_models: Vec::new(),
             local_scan_done: true,
             hardware_scroll: 0,
@@ -619,6 +655,7 @@ impl App {
             message: None,
             last_running: Vec::new(),
             known_ports: HashMap::new(),
+            child_is_tts: HashMap::new(),
             theme: Theme::from_name(studio_core::config::ThemeName::Crane),
             tick: 3,
             started: Instant::now(),

@@ -111,7 +111,9 @@ runnable underneath.
 
 `⏎` on a model solves for the best configuration this machine can actually run
 and starts it — no wizard in the way. When it's up you land on the **ready**
-screen, where the model's apps live (Chat today; more coming).
+screen, where the model's apps live: **Chat** for text/VL models, **TTS
+Playground** for speech models (VoxCPM2). A speech model skips the solver — it
+has no context/KV trade-offs to pick — and starts straight away.
 
 ### Keys
 
@@ -122,6 +124,7 @@ screen, where the model's apps live (Chat today; more coming).
 | Launch options | `↑↓` pick an alternative · `⏎` start · `esc` back |
 | Ready | `↑↓` select app · `⏎` open (Endpoint toggles the connect panel) · `esc` back to models |
 | Chat | `⏎` send · `esc` stop generating, then leave · `^a` attach image · `^p` system prompt · `^l` max tokens · `^t` temperature · `^n` new chat · `PgUp`/`PgDn` scroll |
+| TTS Playground | `⏎` generate · `space`/`p` play or stop the selected clip · `↑↓` select a past clip · `^r` restart the voice model (fresh RNG) · `^n` clear · `esc` back |
 | Anywhere | `F2` cycle theme · `^c` quit |
 
 Quitting always asks what to do with loaded models: **keep serving** in the
@@ -173,6 +176,13 @@ HuggingFace search that only shows architectures Crane can run, and a scan of
 your own disk. Unsupported models are shown greyed with the reason rather than
 hidden.
 
+The scan follows symlinks, so models already living somewhere else (another
+drive, a shared cache) don't need copying — just link them in:
+
+```sh
+ln -s /mnt/big/models/VoxCPM2 ~/.local/share/cranestudio/models/VoxCPM2
+```
+
 **Downloads that survive.**
 Resumable, checksum-verified, with live throughput, ETA and per-file progress.
 Interrupting and restarting picks up where it stopped. Gated repos give an
@@ -186,13 +196,20 @@ an orphaned model holding your VRAM. Port conflicts fall forward instead of
 failing.
 
 **Apps, not just a chat box.**
-Anything running is reachable from the ready screen's app list. Chat is the first
-app — streaming, token-rate readout, image attachments for vision models,
-editable system prompt / `max_tokens` / `temperature`, and dimmed
-chain-of-thought for reasoning models. Benchmark and agent-tool apps are next.
+Anything running is reachable from the ready screen's app list. Chat —
+streaming, token-rate readout, image attachments for vision models, editable
+system prompt / `max_tokens` / `temperature`, dimmed chain-of-thought for
+reasoning models. **TTS Playground** — type text, generate speech with a live
+progress readout, and play the clip back in the terminal (every clip is also
+saved as a `.wav` under the data dir). Benchmark and agent-tool apps are next.
 
 **Supported model families:** Qwen 3.5/3.6/3.8 (incl. VL), Qwen 3, Qwen 2.5,
-Hunyuan, Gemma 4 (incl. VL), MiniCPM-V 4.6, MiniCPM5 — GGUF and safetensors.
+Hunyuan, Gemma 4 (incl. VL), MiniCPM-V 4.6, MiniCPM5, VoxCPM2 (text-to-speech)
+— GGUF and safetensors.
+
+Audio playback on Linux uses ALSA — install `libasound2` (Debian/Ubuntu:
+`apt install libasound2`) if the TTS Playground reports no output device.
+macOS and Windows need nothing extra.
 
 ---
 
@@ -225,7 +242,7 @@ forward to the next free one automatically.
 | What | Where |
 | --- | --- |
 | Settings, HF token, theme | `~/.config/cranestudio/config.ron` |
-| Models | `~/.local/share/cranestudio/models/` |
+| Models | `~/.local/share/cranestudio/models/` (symlinked entries are followed) |
 | Measurements, catalog cache | `~/.local/share/cranestudio/` |
 
 ---

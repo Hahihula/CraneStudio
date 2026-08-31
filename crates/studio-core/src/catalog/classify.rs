@@ -11,6 +11,7 @@ pub enum Classification {
         model_type: &'static str,
         vision: bool,
         gated: bool,
+        audio: bool,
     },
     /// A real architecture was found, but it's not one of Crane's.
     Unsupported {
@@ -29,6 +30,8 @@ pub struct ConfigJson {
     pub model_type: Option<String>,
     #[serde(default)]
     pub architectures: Vec<String>,
+    /// The singular `architecture` field; some configs (VoxCPM2) use only this.
+    pub architecture: Option<String>,
     pub vision_config: Option<serde_json::Value>,
 }
 
@@ -36,7 +39,7 @@ impl ConfigJson {
     #[must_use]
     pub fn classify(&self) -> Classification {
         classify_config(
-            self.model_type.as_deref(),
+            self.model_type.as_deref().or(self.architecture.as_deref()),
             &self.architectures,
             self.vision_config.is_some(),
         )
@@ -64,6 +67,7 @@ pub fn classify_config(
         model_type: family.model_type,
         vision: family.vision,
         gated: family.gated,
+        audio: family.audio,
     }
 }
 
@@ -74,6 +78,7 @@ pub fn classify_gguf_architecture(arch: &str) -> Classification {
             model_type: family.model_type,
             vision: family.vision,
             gated: family.gated,
+            audio: family.audio,
         },
         None => Classification::Unsupported {
             detected: Some(arch.to_string()),
@@ -106,6 +111,7 @@ pub fn apply_path_hint(classification: Classification, path_hint: &str) -> Class
             model_type: family.model_type,
             vision: family.vision,
             gated: family.gated,
+            audio: family.audio,
         }
     })
 }
@@ -119,6 +125,20 @@ mod tests {
             detected: Some("llama".to_string()),
             reason: "Crane does not support this architecture (llama)".to_string(),
         }
+    }
+
+    #[test]
+    fn voxcpm2_singular_architecture_field_classifies_as_supported_audio() {
+        let config: ConfigJson = serde_json::from_str(r#"{"architecture": "voxcpm2"}"#).unwrap();
+        assert!(matches!(
+            config.classify(),
+            Classification::Supported {
+                model_type: "voxcpm2",
+                audio: true,
+                vision: false,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -155,6 +175,7 @@ mod tests {
             model_type: "qwen3_5",
             vision: false,
             gated: false,
+            audio: false,
         };
         assert_eq!(
             apply_path_hint(supported.clone(), "anything/minicpm"),

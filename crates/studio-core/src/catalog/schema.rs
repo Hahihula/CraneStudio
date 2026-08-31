@@ -52,6 +52,15 @@ pub struct Measured {
     pub decode_tps: f32,
 }
 
+/// A secondary HF repo whose files are downloaded into the same directory as a
+/// variant's main weights.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtraRepo {
+    pub repo: String,
+    pub revision: String,
+    pub files: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Variant {
     pub id: String,
@@ -61,6 +70,9 @@ pub struct Variant {
     pub format: Format,
     pub quant: Option<String>,
     pub download_bytes: u64,
+    /// Secondary repos pulled into the same directory after `files`.
+    #[serde(default)]
+    pub extra_repos: Vec<ExtraRepo>,
     /// Keyed by backend class, e.g. `"cuda_sm86"`, `"metal_m3"`, `"cpu"`
     /// (§7.3, §13).
     #[serde(default)]

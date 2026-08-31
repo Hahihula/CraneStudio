@@ -914,5 +914,62 @@
                 ),
             ],
         ),
+        (
+            // VoxCPM2 zero-shot TTS (§2.16). crane-serve auto-detects it from
+            // the singular `architecture: "voxcpm2"` field in config.json, and
+            // serves it on POST /v1/audio/speech. CraneStudio's TTS Playground
+            // app is the front end (§4.7). Speech models skip the VRAM solver.
+            id: "voxcpm2",
+            display_name: "VoxCPM2",
+            family: "voxcpm2",
+            model_type: "voxcpm2",
+            // model.safetensors is ~4.58 GiB; the transformer weights are BF16,
+            // so ~2.3B parameters.
+            params: 2290000000,
+            native_context: 32768,
+            capabilities: [Audio],
+            license: "apache-2.0",
+            gated: false,
+            supports: (
+                isq: false,
+                kv_quant: false,
+                kv_swap: false,
+                vision: false,
+            ),
+            variants: [
+                (
+                    id: "voxcpm2-bf16",
+                    repo: "openbmb/VoxCPM2",
+                    revision: "bffb3df5a29440629464e5e839f4d214c8714c3d",
+                    files: [
+                        "config.json",
+                        "model.safetensors",
+                        "tokenizer.json",
+                        "tokenizer_config.json",
+                        "special_tokens_map.json",
+                    ],
+                    format: Safetensors,
+                    quant: None,
+                    // Sum of the five files above (4_583_768_391) plus the
+                    // audiovae.safetensors from the extra repo (376_889_948).
+                    download_bytes: 4960658339,
+                    // openbmb/VoxCPM2 ships only audiovae.pth; Crane needs the
+                    // converted safetensors, mirrored here and pulled into the
+                    // same directory right after the main files.
+                    extra_repos: [
+                        (
+                            repo: "hahihula/VoxCPM2-audiovae-safetensors",
+                            revision: "59de0ef6fe3fe0e1fcc196e043aea6220cf458b9",
+                            files: ["audiovae.safetensors"],
+                        ),
+                    ],
+                    // PENDING LAUNCH CHECK — architecture, context and the
+                    // byte-exact file sizes come from the HF API at these
+                    // shas; not yet run end to end through `cranestudio
+                    // __serve` in CI.
+                    measured: {},
+                ),
+            ],
+        ),
     ],
 )

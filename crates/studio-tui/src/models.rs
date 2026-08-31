@@ -27,6 +27,8 @@ pub struct LocalModel {
     pub quant: Option<String>,
     pub size: u64,
     pub supported: bool,
+    /// A speech (TTS) model.
+    pub audio: bool,
     /// Crane's `--model-type` for this file, when it's supported.
     pub model_type: Option<String>,
     /// Why it can't be launched, when it can't.
@@ -70,12 +72,12 @@ fn describe(root: &Path, candidate: LocalCandidate) -> LocalModel {
         Format::Gguf => std::fs::metadata(&candidate.path).map_or(0, |m| m.len()),
         Format::Safetensors => safetensors_dir_bytes(&candidate.path).unwrap_or(0),
     };
-    let (supported, model_type, reason) = match &candidate.classification {
-        Classification::Supported { model_type, .. } => {
-            (true, Some((*model_type).to_string()), None)
-        }
+    let (supported, audio, model_type, reason) = match &candidate.classification {
+        Classification::Supported {
+            model_type, audio, ..
+        } => (true, *audio, Some((*model_type).to_string()), None),
         Classification::Unsupported { reason, .. } | Classification::Unknown { reason } => {
-            (false, None, Some(reason.clone()))
+            (false, false, None, Some(reason.clone()))
         }
     };
 
@@ -85,6 +87,7 @@ fn describe(root: &Path, candidate: LocalCandidate) -> LocalModel {
         name,
         size,
         supported,
+        audio,
         model_type,
         reason,
         candidate,

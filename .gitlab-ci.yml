@@ -73,6 +73,16 @@ variables:
 .rust_setup: &rust_setup
   - export CARGO_HOME="${CI_PROJECT_DIR}/.cargo"
   - export PATH="${CARGO_HOME}/bin:${PATH}"
+  # studio-tui links rodio → cpal → alsa-sys for the TTS Playground's playback,
+  # which needs the ALSA dev headers at build time on Linux. macOS/Windows use
+  # CoreAudio/WASAPI (system, nothing to install) and skip this — apt is absent
+  # there. Same "can't be dropped from our side" situation as NASM.
+  - |
+    if command -v apt-get >/dev/null 2>&1 && [ "$(id -u)" = "0" ]; then
+      apt-get update -qq \
+        && apt-get install -y -qq --no-install-recommends libasound2-dev pkg-config \
+        || echo "WARN: could not install libasound2-dev — a shell runner must have it preinstalled"
+    fi
   - |
     if ! command -v cargo >/dev/null 2>&1; then
       echo "no cargo on PATH — installing the pinned toolchain with rustup"
@@ -345,11 +355,13 @@ build:linux-cuda:
     ASSET_TARGET: "x86_64-linux"
     ASSET_BACKEND: "cuda"
     CARGO_FEATURES: "cuda"
+    CUDA_COMPUTE_CAP: "86"
   before_script:
     - |
       if [ -z "${CRANESTUDIO_SHELL_RUNNER:-}" ]; then
         apt-get update -qq
-        apt-get install -y -qq --no-install-recommends curl git ca-certificates build-essential pkg-config libssl-dev
+        # libasound2-dev: rodio/cpal for the TTS Playground's playback (see .rust_setup).
+        apt-get install -y -qq --no-install-recommends curl git ca-certificates build-essential pkg-config libssl-dev libasound2-dev
       fi
     - *rust_setup
     - nvcc --version

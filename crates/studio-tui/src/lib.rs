@@ -3,6 +3,7 @@
 //! model. See PLAN.md §4.
 
 pub mod app;
+pub mod audio;
 pub mod catalog;
 pub mod daemon_client;
 pub mod doctor;
