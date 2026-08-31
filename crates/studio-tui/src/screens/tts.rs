@@ -272,8 +272,7 @@ fn save_clip(text: &str, bytes: &[u8], gen_secs: f64) -> Result<Clip, String> {
         .collect();
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
     let path = dir.join(format!("{}-{ts}.wav", stem.trim_matches('-')));
     std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
 
