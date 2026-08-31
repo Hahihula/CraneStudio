@@ -396,61 +396,62 @@ build:macos-metal:
 # Windows gets the same two backends as Linux: most Windows machines that want
 # this have an NVIDIA card, and the ones that don't still need something that
 # runs.
-build:windows-cpu:
-  stage: build
-  tags: [windows]
-  cache: *cargo_cache
-  variables:
-    ASSET_TARGET: "x86_64-windows"
-    ASSET_BACKEND: "cpu"
-  before_script:
-    - *windows_setup
-  script:
-    - cargo build --release --locked -p cranestudio
-    - .\target\release\cranestudio.exe --version
-    - .\target\release\cranestudio.exe doctor
-    - *package_windows
-  artifacts:
-    name: "cranestudio-x86_64-windows-cpu"
-    paths:
-      - dist/
-    expire_in: 1 month
-  rules: *build_rules
+# Comented out as we curently do not have any windows runners
+# build:windows-cpu:
+#   stage: build
+#   tags: [windows]
+#   cache: *cargo_cache
+#   variables:
+#     ASSET_TARGET: "x86_64-windows"
+#     ASSET_BACKEND: "cpu"
+#   before_script:
+#     - *windows_setup
+#   script:
+#     - cargo build --release --locked -p cranestudio
+#     - .\target\release\cranestudio.exe --version
+#     - .\target\release\cranestudio.exe doctor
+#     - *package_windows
+#   artifacts:
+#     name: "cranestudio-x86_64-windows-cpu"
+#     paths:
+#       - dist/
+#     expire_in: 1 month
+#   rules: *build_rules
 
-build:windows-cuda:
-  stage: build
-  tags: [windows, cuda-windows]
-  cache: *cargo_cache
-  variables:
-    ASSET_TARGET: "x86_64-windows"
-    ASSET_BACKEND: "cuda"
-    CARGO_FEATURES: "cuda"
-  before_script:
-    - *windows_setup
-    - |
-      if (-not (Get-Command nvcc.exe -ErrorAction SilentlyContinue)) {
-        # cudarc's build script shells out to nvcc to learn the CUDA version, so
-        # the toolkit — not just the driver — has to be on this runner.
-        if ($env:CUDA_PATH -and (Test-Path "$env:CUDA_PATH\bin\nvcc.exe")) {
-          $env:PATH = "$env:CUDA_PATH\bin;$env:PATH"
-        } else {
-          throw "nvcc not found and CUDA_PATH is unset — install the CUDA toolkit on this runner"
-        }
-      }
-      nvcc --version
-  script:
-    - cargo build --release --locked -p cranestudio --features cuda
-    - .\target\release\cranestudio.exe --version
-    # Runs against the runner's own driver: a CUDA build that can't see a GPU
-    # here would ship broken, which is what this catches (§12).
-    - .\target\release\cranestudio.exe doctor
-    - *package_windows
-  artifacts:
-    name: "cranestudio-x86_64-windows-cuda"
-    paths:
-      - dist/
-    expire_in: 1 month
-  rules: *build_rules
+# build:windows-cuda:
+#   stage: build
+#   tags: [windows, cuda-windows]
+#   cache: *cargo_cache
+#   variables:
+#     ASSET_TARGET: "x86_64-windows"
+#     ASSET_BACKEND: "cuda"
+#     CARGO_FEATURES: "cuda"
+#   before_script:
+#     - *windows_setup
+#     - |
+#       if (-not (Get-Command nvcc.exe -ErrorAction SilentlyContinue)) {
+#         # cudarc's build script shells out to nvcc to learn the CUDA version, so
+#         # the toolkit — not just the driver — has to be on this runner.
+#         if ($env:CUDA_PATH -and (Test-Path "$env:CUDA_PATH\bin\nvcc.exe")) {
+#           $env:PATH = "$env:CUDA_PATH\bin;$env:PATH"
+#         } else {
+#           throw "nvcc not found and CUDA_PATH is unset — install the CUDA toolkit on this runner"
+#         }
+#       }
+#       nvcc --version
+#   script:
+#     - cargo build --release --locked -p cranestudio --features cuda
+#     - .\target\release\cranestudio.exe --version
+#     # Runs against the runner's own driver: a CUDA build that can't see a GPU
+#     # here would ship broken, which is what this catches (§12).
+#     - .\target\release\cranestudio.exe doctor
+#     - *package_windows
+#   artifacts:
+#     name: "cranestudio-x86_64-windows-cuda"
+#     paths:
+#       - dist/
+#     expire_in: 1 month
+#   rules: *build_rules
 
 #############################################
 # Release — GitLab first, then the same
