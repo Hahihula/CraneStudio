@@ -186,6 +186,13 @@ check:catalog-live:
     cp README.md "dist/${NAME}/" 2>/dev/null || true
     # MIT requires the license text to travel with the binary.
     cp LICENSE "dist/${NAME}/" 2>/dev/null || true
+    # The CUDA build bundles its runtime libraries (see build:linux-cuda) so the
+    # archive needs no separately installed CUDA toolkit. Carry them and their
+    # NOTICE when they're present; every other build simply has no cuda-libs/.
+    if [ -d target/release/cuda-libs ]; then
+      cp -r target/release/cuda-libs "dist/${NAME}/"
+      cp target/release/NOTICE-CUDA.txt "dist/${NAME}/" 2>/dev/null || true
+    fi
     CRANE_REV=$(grep -m1 '^crane-serve = ' Cargo.toml | sed -n 's/.*rev = "\([^"]*\)".*/\1/p')
     {
       echo "CraneStudio ${VERSION}"
@@ -202,6 +209,9 @@ check:catalog-live:
       echo "rustc         $(rustc --version)"
       echo "crane-serve   ${CRANE_REV}"
       echo "runner        ${CI_RUNNER_DESCRIPTION:-unknown} (${CI_RUNNER_TAGS:-untagged})"
+      if [ -d target/release/cuda-libs ]; then
+        echo "cuda-libs     bundled: $(ls target/release/cuda-libs | tr '\n' ' ')"
+      fi
       echo
       echo "Reproduce this build:"
       echo "  git clone ${CI_PROJECT_URL}.git && cd ${CI_PROJECT_NAME}"
@@ -361,18 +371,58 @@ build:linux-cuda:
       if [ -z "${CRANESTUDIO_SHELL_RUNNER:-}" ]; then
         apt-get update -qq
         # libasound2-dev: rodio/cpal for the TTS Playground's playback (see .rust_setup).
-        apt-get install -y -qq --no-install-recommends curl git ca-certificates build-essential pkg-config libssl-dev libasound2-dev
+        # patchelf: rewrites the binary's RUNPATH to find its bundled CUDA libs.
+        apt-get install -y -qq --no-install-recommends curl git ca-certificates build-essential pkg-config libssl-dev libasound2-dev patchelf
       fi
     - *rust_setup
     - nvcc --version
   script:
     - cargo build --release --locked -p cranestudio --features cuda
-    # Ships against the user's own NVIDIA driver, so the link is dynamic and
-    # that is expected (§12). Print what it actually needs, so a "missing
-    # libcuda" report from a user can be checked against this log.
-    - ldd target/release/cranestudio | grep -Ei "cuda|nvidia" || true
+    # Bundle the CUDA runtime next to the binary so the archive is
+    # self-contained: the host needs only an NVIDIA *driver* (>= 560 for the
+    # 12.6 runtime bundled here), not a matching CUDA *toolkit*. Without this a
+    # box with, say, only CUDA 13 installed can't satisfy the libcudart.so.12
+    # the binary links. libcuda.so.1 (the driver) is deliberately NOT bundled —
+    # it must come from the host and is backward compatible.
+    - |
+      set -eu
+      BIN=target/release/cranestudio
+      LIBDIR=target/release/cuda-libs
+      mkdir -p "$LIBDIR"
+      ldd "$BIN" | awk '/=> \// {print $3}' \
+        | grep -E '/lib(cudart|cublas|cublasLt|curand|nvrtc|nvJitLink)\.so' \
+        | sort -u | while read -r so; do cp -Lv "$so" "$LIBDIR/"; done
+      # nvrtc dlopens its builtins by exact name, so ldd never lists them.
+      if ls "$LIBDIR"/libnvrtc.so.* >/dev/null 2>&1; then
+        cp -Lv /usr/local/cuda/lib64/libnvrtc-builtins.so.* "$LIBDIR/" || true
+      fi
+      # DT_RPATH (--force-rpath), not the default DT_RUNPATH: RUNPATH is not
+      # honoured for a dependency's own dependencies, so libcublasLt (pulled in
+      # by libcublas) would leak to a system copy. Give every bundled lib
+      # `$ORIGIN` too so they find their siblings in the same directory.
+      patchelf --force-rpath --set-rpath '$ORIGIN/cuda-libs' "$BIN"
+      for lib in "$LIBDIR"/*.so.*; do
+        patchelf --force-rpath --set-rpath '$ORIGIN' "$lib"
+      done
+      printf '%s\n' \
+        "This archive bundles unmodified NVIDIA CUDA runtime libraries in ./cuda-libs/" \
+        "(libcudart, libcublas, libcublasLt, libcurand, and libnvrtc when required)," \
+        "redistributed under the NVIDIA CUDA Toolkit EULA, which permits redistribution" \
+        "of these runtime components: https://docs.nvidia.com/cuda/eula/" \
+        "" \
+        "They are Copyright (c) NVIDIA Corporation, included so the CUDA build runs" \
+        "without a separately installed CUDA toolkit. An NVIDIA driver is still" \
+        "required (>= 560 for the CUDA 12.6 runtime bundled here)." \
+        "" \
+        "CraneStudio itself is MIT licensed (see LICENSE)." \
+        > target/release/NOTICE-CUDA.txt
+      echo "bundled $(ls "$LIBDIR" | wc -l) libs, $(du -sh "$LIBDIR" | cut -f1):"
+      ls -la "$LIBDIR"
+      # Must now resolve entirely in-tree except libcuda.so.1 (the host driver).
+      ldd "$BIN"
     - *smoke
     - *package
+    - rm -rf target/release/cuda-libs target/release/NOTICE-CUDA.txt
   artifacts:
     name: "cranestudio-x86_64-linux-cuda"
     paths:

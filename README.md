@@ -40,11 +40,17 @@ No toolchain, no Python, no install — one binary. Grab it from
 
 | Archive | For |
 | --- | --- |
-| `cranestudio-<version>-x86_64-linux-cuda.tar.gz` | Linux with an NVIDIA GPU (driver 525 or newer) |
+| `cranestudio-<version>-x86_64-linux-cuda.tar.gz` | Linux with an NVIDIA GPU (driver 560 or newer). Bundles the CUDA runtime — no CUDA toolkit needed, any toolkit version is fine. Larger download (~0.5 GB). |
 | `cranestudio-<version>-x86_64-windows-cuda.zip` | Windows with an NVIDIA GPU (driver 525 or newer) |
 | `cranestudio-<version>-aarch64-macos-metal.tar.gz` | Apple Silicon Macs |
 | `cranestudio-<version>-x86_64-linux-cpu.tar.gz` | Linux without a usable GPU — runs everywhere, slow on big models |
 | `cranestudio-<version>-x86_64-windows-cpu.zip` | Windows without a usable GPU |
+
+The Linux CUDA archive carries its own `libcudart` / `libcublas` / `libcublasLt` /
+`libcurand` in `cuda-libs/` next to the binary, so it runs regardless of which
+CUDA toolkit (12, 13, or none) is installed — only the NVIDIA **driver** has to be
+recent enough. Keep `cuda-libs/` beside the binary. Building from source instead
+links against whatever CUDA you have locally and skips the bundle.
 
 ```sh
 tar xzf cranestudio-*-x86_64-linux-cuda.tar.gz

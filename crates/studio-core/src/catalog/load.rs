@@ -349,11 +349,20 @@ mod tests {
         for model in bundled().models {
             for variant in &model.variants {
                 let mut total = 0u64;
-                for file in &variant.files {
-                    let url = format!(
-                        "https://huggingface.co/{}/resolve/{}/{file}",
-                        variant.repo, variant.revision
-                    );
+                // `download_bytes` covers the extra-repo files too — they land in
+                // the same directory and count towards the same progress bar.
+                let all_files = variant
+                    .files
+                    .iter()
+                    .map(|f| (&variant.repo, &variant.revision, f))
+                    .chain(variant.extra_repos.iter().flat_map(|extra| {
+                        extra
+                            .files
+                            .iter()
+                            .map(move |f| (&extra.repo, &extra.revision, f))
+                    }));
+                for (repo, revision, file) in all_files {
+                    let url = format!("https://huggingface.co/{repo}/resolve/{revision}/{file}");
                     match client.head(&url).send().await {
                         Ok(response) if response.status().is_success() => {
                             // LFS files answer with the real size in

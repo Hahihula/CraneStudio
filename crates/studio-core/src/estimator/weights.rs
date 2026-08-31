@@ -221,6 +221,10 @@ mod tests {
     #[ignore = "reads a real local checkpoint at a machine-specific path — not run by default"]
     fn real_qwen3_5_4b_param_counts_are_plausible() {
         let dir = Path::new("/home/hahihula/mywork/ai/additional_models/Qwen3.5-4B");
+        if !dir.exists() {
+            eprintln!("skipping: no local checkpoint at {}", dir.display());
+            return;
+        }
         let counts = param_counts(dir).unwrap();
         let total = counts.embedding_params + counts.non_embedding_params;
         // "4B" is a rounded model name; real dense param counts for
