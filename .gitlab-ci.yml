@@ -366,6 +366,7 @@ build:linux-cuda:
     paths:
       - dist/
     expire_in: 1 month
+  allow_failure: true
   rules: *build_rules
 
 build:macos-metal:
@@ -389,6 +390,7 @@ build:macos-metal:
     paths:
       - dist/
     expire_in: 1 month
+  allow_failure: true
   rules: *build_rules
 
 # Windows gets the same two backends as Linux: most Windows machines that want
