@@ -1,3 +1,20 @@
+# 🪞 GitHub Mirror
+
+[![GitLab](https://img.shields.io/badge/Primary%20Repo-GitLab-orange?style=for-the-badge&logo=gitlab)](https://gitlab.com/hahihula/crane-studio)
+
+> **⚠️ Important Notice**: This repository is a **read-only mirror** of the primary repository hosted on GitLab.
+
+- **Primary Repository**: [https://gitlab.com/hahihula/crane-studio](https://gitlab.com/hahihula/crane-studio)
+- **Submit Issues**: [GitLab Issues](https://gitlab.com/hahihula/crane-studio/-/issues)
+- **Submit PRs**: [GitLab Merge Requests](https://gitlab.com/hahihula/crane-studio/-/merge_requests)
+- **Download a binary**: [GitHub Releases](https://github.com/Hahihula/CraneStudio/releases) — the same archives this pipeline builds, or [GitLab Releases](https://gitlab.com/hahihula/crane-studio/-/releases)
+
+All development, issue tracking, and pull requests should be done on the GitLab repository.
+
+---
+
+# Original README
+
 # CraneStudio
 
 **A local model studio in the terminal.** Pick a model, press enter, get an
