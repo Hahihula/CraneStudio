@@ -3,7 +3,7 @@
 //! daemon process and need the same view of "what's configured" and
 //! "what's running".
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use studio_core::launch::LaunchSpec;
 
@@ -12,6 +12,15 @@ use crate::registry::ModelRegistry;
 
 pub type SpawnBuilder =
     fn(&LaunchSpec) -> std::io::Result<(studio_supervisor::SpawnRequest, String)>;
+
+/// What the gateway is actually bound to right now — updated by
+/// `serve_with_rebind` after every (re)bind, so a control-API status query
+/// always reflects reality rather than a stale start-up value.
+#[derive(Debug, Clone)]
+pub struct BoundInfo {
+    pub host: String,
+    pub port: u16,
+}
 
 pub struct GatewayState {
     pub daemon: Arc<Daemon>,
@@ -24,6 +33,14 @@ pub struct GatewayState {
     /// but lightweight stand-in process instead of a real crane-serve
     /// model.
     pub(crate) spawn_builder: SpawnBuilder,
+    /// PLAN.md §10.1: set only when the gateway is bound off loopback —
+    /// every `/v1/*` request must then carry `Authorization: Bearer
+    /// <token>`. `None` (the loopback default) requires no auth. A
+    /// `RwLock` (not a plain field) because the TUI can flip LAN exposure
+    /// on/off at runtime via the control API, with running models
+    /// undisturbed — see `crate::control`'s `/control/gateway/public`.
+    auth_token: RwLock<Option<String>>,
+    bound: RwLock<BoundInfo>,
 }
 
 impl GatewayState {
@@ -39,6 +56,41 @@ impl GatewayState {
             registry: ModelRegistry::new(),
             client: reqwest::Client::new(),
             spawn_builder,
+            auth_token: RwLock::new(None),
+            bound: RwLock::new(BoundInfo {
+                host: "127.0.0.1".to_string(),
+                port: 0,
+            }),
         })
+    }
+
+    #[must_use]
+    pub fn auth_token(&self) -> Option<String> {
+        self.auth_token
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    pub fn set_auth_token(&self, token: Option<String>) {
+        *self
+            .auth_token
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = token;
+    }
+
+    #[must_use]
+    pub fn bound(&self) -> BoundInfo {
+        self.bound
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    pub fn set_bound(&self, host: String, port: u16) {
+        *self
+            .bound
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = BoundInfo { host, port };
     }
 }

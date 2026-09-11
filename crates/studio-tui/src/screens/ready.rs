@@ -21,10 +21,18 @@ use crate::ui::{self, Chrome, Message};
 const HINTS: &[(&str, &str)] = &[
     ("↑↓", "select app"),
     ("⏎", "open"),
+    ("l", "logs"),
+    ("p", "public"),
     ("esc", "models"),
     ("f2", "theme"),
     ("q", "quit"),
 ];
+
+/// How many of the most recent captured stderr lines to show — the log
+/// panel is a fixed-height strip on this screen (like `Endpoint`), not a
+/// scrollable pager, so only the tail end (where a crash's actual error
+/// usually is) needs to fit.
+const LOG_PANEL_LINES: usize = 12;
 
 /// One entry in the app launcher. `available: false` entries are deliberately
 /// visible: they're the roadmap, and hiding them would make the launcher look
@@ -84,6 +92,7 @@ fn apps(is_tts: bool) -> &'static [StudioApp] {
 }
 
 #[derive(Default)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct State {
     pub id: Option<u64>,
     pub name: String,
@@ -99,6 +108,13 @@ pub struct State {
     /// The endpoint app is a panel on this screen rather than a screen of its
     /// own — it's four lines of copy-paste, not a place to navigate to.
     pub show_endpoint: bool,
+    /// §4.5: "Log tail pane, toggleable" — the captured stderr tail for this
+    /// child, most useful for seeing *why* a model crashed beyond the
+    /// one-line exit classification. `None` while a fetch is in flight or
+    /// none has been requested yet; `Some(Err(_))` if the control API call
+    /// failed (e.g. daemon restarted and forgot this child).
+    pub show_logs: bool,
+    pub log_tail: Option<Result<String, String>>,
 }
 
 impl State {
@@ -113,6 +129,8 @@ impl State {
         self.is_tts = is_tts;
         self.context = None;
         self.selected = 0;
+        self.show_logs = false;
+        self.log_tail = None;
     }
 
     pub fn set_active(
@@ -152,8 +170,42 @@ pub fn handle_key(app: &mut TuiApp, key: KeyEvent) -> bool {
             open_selected(app);
             true
         }
+        KeyCode::Char('l') => {
+            toggle_logs(app);
+            true
+        }
+        KeyCode::Char('p') => {
+            toggle_public(app);
+            true
+        }
         _ => false,
     }
+}
+
+/// PLAN.md §10.1's "explicit opt-in" for LAN exposure — this is gateway-wide
+/// (every model multiplexed through it, not just this one), toggled live via
+/// `/control/gateway/public` with no restart and no other model disturbed.
+fn toggle_public(app: &mut TuiApp) {
+    let currently_public = app.gateway_status.as_ref().is_some_and(|s| s.public);
+    app.message = Some(Message::info(if currently_public {
+        "disabling public access…".to_string()
+    } else {
+        "enabling public access…".to_string()
+    }));
+    app.spawn_gateway_public_toggle(!currently_public);
+}
+
+fn toggle_logs(app: &mut TuiApp) {
+    app.ready.show_logs = !app.ready.show_logs;
+    if !app.ready.show_logs {
+        return;
+    }
+    let Some(id) = app.ready.id else {
+        app.ready.log_tail = Some(Err("no child to fetch logs for yet".to_string()));
+        return;
+    };
+    app.ready.log_tail = None;
+    app.spawn_log_tail_fetch(id);
 }
 
 fn open_selected(app: &mut TuiApp) {
@@ -183,11 +235,20 @@ pub fn render(app: &mut TuiApp, frame: &mut Frame) {
     // Every panel is exactly as tall as what's in it, and the leftover space is
     // left blank — a half-empty bordered box reads as something missing.
     let endpoint_height = if app.ready.show_endpoint { 8 } else { 0 };
+    let is_public = app.gateway_status.as_ref().is_some_and(|s| s.public);
+    let public_height = if is_public { 8 } else { 0 };
+    let logs_height = if app.ready.show_logs {
+        u16::try_from(LOG_PANEL_LINES).unwrap_or(u16::MAX) + 2
+    } else {
+        0
+    };
     #[allow(clippy::cast_possible_truncation)]
     let apps_height = (apps(app.ready.is_tts).len() * 2) as u16 + 2;
-    let [status_area, endpoint_area, apps_area, _] = Layout::vertical([
+    let [status_area, endpoint_area, public_area, logs_area, apps_area, _] = Layout::vertical([
         Constraint::Length(7),
         Constraint::Length(endpoint_height),
+        Constraint::Length(public_height),
+        Constraint::Length(logs_height),
         Constraint::Length(apps_height),
         Constraint::Min(0),
     ])
@@ -196,6 +257,12 @@ pub fn render(app: &mut TuiApp, frame: &mut Frame) {
     render_status(app, frame, status_area);
     if app.ready.show_endpoint {
         render_endpoint(app, frame, endpoint_area);
+    }
+    if is_public {
+        render_public(app, frame, public_area);
+    }
+    if app.ready.show_logs {
+        render_logs(app, frame, logs_area);
     }
     render_apps(app, frame, apps_area);
 }
@@ -291,6 +358,85 @@ fn render_endpoint(app: &TuiApp, frame: &mut Frame, area: Rect) {
             Style::new().fg(app.theme.accent_alt),
         )),
     ];
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// PLAN.md §10.1: shown only while the gateway is actually LAN-exposed —
+/// this is gateway-wide (every model behind the same base URL, not just the
+/// one on screen), toggled with `p` and requiring no daemon restart.
+fn render_public(app: &TuiApp, frame: &mut Frame, area: Rect) {
+    let block = app.theme.block("Public Access");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let Some(status) = &app.gateway_status else {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled("checking…", app.theme.muted_style()))),
+            inner,
+        );
+        return;
+    };
+
+    let host = app
+        .local_ip
+        .map_or_else(|| status.host.clone(), |ip| ip.to_string());
+    let base = format!("http://{host}:{}/v1", status.port);
+    let token = status.auth_token.as_deref().unwrap_or("");
+
+    let lines = vec![
+        Line::from(Span::styled(
+            "every model behind this gateway is now reachable from your network — anyone with the token below can use your GPU and read your prompts",
+            Style::new().fg(app.theme.warning),
+        )),
+        Line::raw(""),
+        ui::field(&app.theme, "OPENAI_BASE_URL", base),
+        ui::field(&app.theme, "OPENAI_API_KEY", token.to_string()),
+        Line::raw(""),
+        Line::from(Span::styled(
+            "press p again to stop sharing",
+            app.theme.muted_style(),
+        )),
+    ];
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// §4.5's "log tail pane" — the captured stderr tail for this child, most
+/// useful right after `Model` above reads "exited": the one-line
+/// classification says *what kind* of crash, this shows the actual output
+/// that produced it (OOM messages, stack traces, config errors, ...).
+fn render_logs(app: &TuiApp, frame: &mut Frame, area: Rect) {
+    let block = app.theme.block("Logs");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let lines: Vec<Line> = match &app.ready.log_tail {
+        None => vec![Line::from(Span::styled(
+            "fetching…",
+            app.theme.muted_style(),
+        ))],
+        Some(Err(err)) => vec![Line::from(Span::styled(
+            format!("couldn't fetch logs: {err}"),
+            Style::new().fg(app.theme.error),
+        ))],
+        Some(Ok(tail)) if tail.is_empty() => vec![Line::from(Span::styled(
+            "(no output captured yet)",
+            app.theme.muted_style(),
+        ))],
+        Some(Ok(tail)) => tail
+            .lines()
+            .rev()
+            .take(LOG_PANEL_LINES)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .map(|line| {
+                Line::from(Span::styled(
+                    crate::ui::text::truncate(line, inner.width as usize),
+                    Style::new().fg(app.theme.text),
+                ))
+            })
+            .collect(),
+    };
     frame.render_widget(Paragraph::new(lines), inner);
 }
 

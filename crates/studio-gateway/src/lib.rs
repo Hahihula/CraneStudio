@@ -5,9 +5,13 @@ mod control;
 mod measure;
 mod proxy;
 mod registry;
+mod runtime;
 mod state;
 
-pub use control::{DEFAULT_CONTROL_PORT, DETACH_GRACE_PERIOD, Daemon, reap_stale_children, router};
+pub use control::{
+    DEFAULT_CONTROL_PORT, DETACH_GRACE_PERIOD, Daemon, GatewayStatus, reap_stale_children, router,
+};
 pub use proxy::{DEFAULT_GATEWAY_PORT, router as gateway_router};
 pub use registry::ModelRegistry;
-pub use state::{GatewayState, SpawnBuilder};
+pub use runtime::{MAX_PORT_ATTEMPTS, bind_with_fallback, generate_auth_token, serve_with_rebind};
+pub use state::{BoundInfo, GatewayState, SpawnBuilder};

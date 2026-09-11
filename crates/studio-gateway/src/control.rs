@@ -13,8 +13,8 @@
 //! again.
 
 use std::path::Path as FsPath;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -28,6 +28,8 @@ use studio_core::launch::LaunchSpec;
 use studio_supervisor::{ChildId, ChildInfo, ChildState, Supervisor};
 use tokio::sync::watch;
 
+use crate::state::GatewayState;
+
 /// §3.1a: "Give a short grace period (~5s) so a TUI restart or a transient
 /// reconnect does not kill a session."
 pub const DETACH_GRACE_PERIOD: Duration = Duration::from_secs(5);
@@ -37,6 +39,29 @@ pub const DETACH_GRACE_PERIOD: Duration = Duration::from_secs(5);
 /// own default `:1234` (§3.2), since the control plane and the model
 /// multiplexer are separate concerns that happen to share a process.
 pub const DEFAULT_CONTROL_PORT: u16 = 41999;
+
+/// What `Daemon::set_gateway_public`/`gateway_status` need to reach the
+/// gateway listener: the shared state (to read/write the auth token and see
+/// what's actually bound) and the channel that tells `serve_with_rebind`
+/// which host to bind next. Set once, right after both the control API and
+/// the gateway are constructed in `run_daemon` — a plain field can't work
+/// here since `Daemon` exists (and is handed to `GatewayState::new`) before
+/// the gateway does.
+struct GatewayLink {
+    state: Arc<GatewayState>,
+    bind_tx: watch::Sender<String>,
+}
+
+/// Reported by `/control/gateway/public` (both the toggle and the plain
+/// status GET) — safe to include the token here since the control API is
+/// loopback-only (§10.1), unlike the gateway itself.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayStatus {
+    pub public: bool,
+    pub host: String,
+    pub port: u16,
+    pub auth_token: Option<String>,
+}
 
 pub struct Daemon {
     supervisor: Supervisor,
@@ -51,6 +76,7 @@ pub struct Daemon {
     /// part of "stop everything" would have its final measurement silently
     /// lost to the runtime shutdown racing the sampler's next ~1s tick.
     sampler_tasks: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    gateway: OnceLock<GatewayLink>,
 }
 
 impl Daemon {
@@ -75,13 +101,62 @@ impl Daemon {
             shutdown_tx,
             grace_period,
             sampler_tasks: std::sync::Mutex::new(Vec::new()),
+            gateway: OnceLock::new(),
         });
         (daemon, shutdown_rx)
+    }
+
+    /// Wires this daemon up to the gateway it shares a process with, so
+    /// `/control/gateway/public` has something to act on. Called exactly
+    /// once, in `run_daemon`, right after both are constructed.
+    pub fn attach_gateway(&self, state: Arc<GatewayState>, bind_tx: watch::Sender<String>) {
+        let _ = self.gateway.set(GatewayLink { state, bind_tx });
     }
 
     #[must_use]
     pub fn supervisor(&self) -> &Supervisor {
         &self.supervisor
+    }
+
+    /// PLAN.md §10.1: flips the gateway between loopback-only and
+    /// LAN-exposed. Enabling generates a fresh bearer token every time (no
+    /// point reusing one that may have leaked from a previous session) and
+    /// waits briefly for `serve_with_rebind` to actually complete the
+    /// rebind, so the response reflects reality rather than an optimistic
+    /// guess. Returns `None` if the gateway was never attached (never
+    /// happens outside of a test harness that only builds the control
+    /// router).
+    pub async fn set_gateway_public(&self, enabled: bool) -> Option<GatewayStatus> {
+        let link = self.gateway.get()?;
+        let (host, token) = if enabled {
+            (
+                "0.0.0.0".to_string(),
+                Some(crate::runtime::generate_auth_token()),
+            )
+        } else {
+            ("127.0.0.1".to_string(), None)
+        };
+        link.state.set_auth_token(token);
+        let _ = link.bind_tx.send(host.clone());
+
+        // Best-effort wait for `serve_with_rebind` to finish the rebind —
+        // the toggle still "succeeds" from the caller's point of view even
+        // if this times out, since the request has already been sent and
+        // will complete asynchronously.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        while tokio::time::Instant::now() < deadline {
+            if link.state.bound().host == host {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        Some(gateway_status_inner(link))
+    }
+
+    #[must_use]
+    pub fn gateway_status(&self) -> Option<GatewayStatus> {
+        let link = self.gateway.get()?;
+        Some(gateway_status_inner(link))
     }
 
     #[must_use]
@@ -118,12 +193,27 @@ impl Daemon {
     }
 }
 
+fn gateway_status_inner(link: &GatewayLink) -> GatewayStatus {
+    let bound = link.state.bound();
+    GatewayStatus {
+        public: bound.host != "127.0.0.1",
+        host: bound.host,
+        port: bound.port,
+        auth_token: link.state.auth_token(),
+    }
+}
+
 pub fn router(daemon: Arc<Daemon>) -> Router {
     Router::new()
         .route("/control/launch", post(launch))
         .route("/control/stop/{id}", post(stop))
         .route("/control/list", get(list))
         .route("/control/status", get(status))
+        .route("/control/log/{id}", get(log_tail))
+        .route(
+            "/control/gateway/public",
+            get(get_gateway_public).post(set_gateway_public),
+        )
         .route("/control/detach", post(detach))
         .route("/control/shutdown", post(shutdown))
         .route("/control/attach", get(attach))
@@ -215,6 +305,44 @@ async fn stop(State(daemon): State<Arc<Daemon>>, Path(id): Path<u64>) -> StatusC
     } else {
         StatusCode::NOT_FOUND
     }
+}
+
+/// The captured stderr tail for a child, most useful right after it's
+/// `Exited` — lets a client (the TUI's "show logs" panel) show *why* a
+/// model crashed beyond the one-line classification (§3.3's `LogRing`).
+async fn log_tail(
+    State(daemon): State<Arc<Daemon>>,
+    Path(id): Path<u64>,
+) -> Result<String, StatusCode> {
+    daemon
+        .supervisor
+        .log_tail(ChildId(id))
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+#[derive(Deserialize)]
+struct SetGatewayPublicRequest {
+    enabled: bool,
+}
+
+async fn set_gateway_public(
+    State(daemon): State<Arc<Daemon>>,
+    Json(req): Json<SetGatewayPublicRequest>,
+) -> Result<Json<GatewayStatus>, StatusCode> {
+    daemon
+        .set_gateway_public(req.enabled)
+        .await
+        .map(Json)
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)
+}
+
+async fn get_gateway_public(
+    State(daemon): State<Arc<Daemon>>,
+) -> Result<Json<GatewayStatus>, StatusCode> {
+    daemon
+        .gateway_status()
+        .map(Json)
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)
 }
 
 #[derive(Serialize)]
@@ -509,5 +637,106 @@ mod tests {
         shutdown_rx.changed().await.unwrap();
         assert!(*shutdown_rx.borrow());
         assert!(daemon.supervisor().state(id).is_none());
+    }
+
+    /// End-to-end coverage of the TUI's "serve public" toggle: enabling it
+    /// rebinds the gateway off loopback and requires the freshly-generated
+    /// bearer token; disabling it rebinds back to loopback and drops the
+    /// requirement — all without touching the control API or any running
+    /// child.
+    #[tokio::test]
+    async fn gateway_public_toggle_rebinds_and_requires_a_fresh_token() {
+        let (daemon, shutdown_rx) =
+            Daemon::with_grace_period(Supervisor::new(), Duration::from_secs(5));
+        let gateway_state = crate::state::GatewayState::new(daemon.clone());
+        let (bind_tx, bind_rx) = watch::channel("127.0.0.1".to_string());
+        daemon.attach_gateway(gateway_state.clone(), bind_tx);
+
+        let gateway_app = crate::proxy::router(gateway_state.clone());
+        tokio::spawn(crate::runtime::serve_with_rebind(
+            gateway_app,
+            gateway_state.clone(),
+            0,
+            0,
+            bind_rx,
+            shutdown_rx,
+        ));
+        wait_for_bind(&gateway_state, "127.0.0.1").await;
+
+        let control_addr = spawn_server(daemon.clone()).await;
+        let client = reqwest::Client::new();
+
+        let enabled: GatewayStatus = client
+            .post(format!("http://{control_addr}/control/gateway/public"))
+            .json(&serde_json::json!({ "enabled": true }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(enabled.public);
+        assert_eq!(enabled.host, "0.0.0.0");
+        let token = enabled.auth_token.expect("enabling must mint a token");
+
+        let gateway_port = enabled.port;
+        let unauthed = client
+            .get(format!("http://127.0.0.1:{gateway_port}/v1/models"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(unauthed.status(), StatusCode::UNAUTHORIZED);
+
+        let authed = client
+            .get(format!("http://127.0.0.1:{gateway_port}/v1/models"))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(authed.status(), StatusCode::OK);
+
+        let disabled: GatewayStatus = client
+            .post(format!("http://{control_addr}/control/gateway/public"))
+            .json(&serde_json::json!({ "enabled": false }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(!disabled.public);
+        assert_eq!(disabled.host, "127.0.0.1");
+        assert!(disabled.auth_token.is_none());
+        assert_ne!(
+            disabled.port, gateway_port,
+            "rebinding with preferred port 0 should land on a fresh ephemeral port"
+        );
+
+        // The old public port no longer answers — it was rebound elsewhere.
+        assert!(
+            client
+                .get(format!("http://127.0.0.1:{gateway_port}/v1/models"))
+                .send()
+                .await
+                .is_err()
+        );
+
+        // The new (private) port works without any token at all.
+        let after = client
+            .get(format!("http://127.0.0.1:{}/v1/models", disabled.port))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(after.status(), StatusCode::OK);
+    }
+
+    async fn wait_for_bind(state: &Arc<crate::state::GatewayState>, host: &str) {
+        for _ in 0..100 {
+            if state.bound().host == host && state.bound().port != 0 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("gateway never bound to {host}");
     }
 }
