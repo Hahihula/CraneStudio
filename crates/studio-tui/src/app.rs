@@ -104,6 +104,16 @@ pub enum BackgroundEvent {
     ChatError(String),
     TtsGenerated(Box<screens::tts::Clip>),
     TtsError(String),
+    /// §4.5's log tail pane — `id` guards against a stale reply landing
+    /// after the user already navigated to a different child.
+    LogTail {
+        id: u64,
+        result: Result<String, String>,
+    },
+    /// §10.1's "serve public" toggle — the same event covers both a plain
+    /// status fetch and the result of flipping it, since both hit
+    /// `/control/gateway/public` and get the same response shape back.
+    GatewayStatus(Result<studio_gateway::GatewayStatus, String>),
 }
 
 /// Rolling utilization history, 0–1 per sample, oldest first.
@@ -178,6 +188,13 @@ pub struct App {
     pub known_ports: HashMap<u64, u16>,
     /// Which running children are speech models, by id.
     pub child_is_tts: HashMap<u64, bool>,
+    /// Whether the gateway is currently loopback-only or LAN-exposed (§10.1),
+    /// and its bearer token if so — `None` until the first fetch lands.
+    pub gateway_status: Option<studio_gateway::GatewayStatus>,
+    /// The address another machine on the LAN would actually connect to —
+    /// computed once at startup, since `0.0.0.0` (what the gateway binds to
+    /// when public) isn't itself a reachable destination for a client.
+    pub local_ip: Option<std::net::IpAddr>,
     /// Cycled with `F2`, remembered in `config.ron`.
     pub theme: Theme,
     /// Incremented every tick — drives spinners and the live meters.
@@ -236,6 +253,8 @@ impl App {
             last_running: Vec::new(),
             known_ports: HashMap::new(),
             child_is_tts: HashMap::new(),
+            gateway_status: None,
+            local_ip: studio_core::network::local_ip(),
             theme: Theme::from_name(config.theme),
             tick: 0,
             started: Instant::now(),
@@ -245,6 +264,7 @@ impl App {
         };
         app.spawn_catalog_load();
         app.spawn_local_scan();
+        app.spawn_gateway_status_fetch();
         Ok(app)
     }
 
@@ -287,6 +307,44 @@ impl App {
         self.spawn_local_scan();
     }
 
+    /// PLAN.md §10.1: fetches whether the gateway is currently loopback-only
+    /// or LAN-exposed (and its bearer token if so) from the control API —
+    /// safe to call this often since it's a cheap loopback round trip and
+    /// never leaves the machine, unlike the gateway itself.
+    pub fn spawn_gateway_status_fetch(&self) {
+        let tx = self.sender();
+        let base = self.control_base();
+        tokio::spawn(async move {
+            let result = fetch_gateway_status(&base).await;
+            let _ = tx.send(BackgroundEvent::GatewayStatus(result));
+        });
+    }
+
+    /// Flips LAN exposure on/off via the control API — see
+    /// `studio_gateway::runtime::serve_with_rebind` for how the daemon
+    /// rebinds the gateway listener without disturbing any running model.
+    pub fn spawn_gateway_public_toggle(&self, enabled: bool) {
+        let tx = self.sender();
+        let base = self.control_base();
+        tokio::spawn(async move {
+            let client = reqwest::Client::new();
+            let result = match client
+                .post(format!("{base}/control/gateway/public"))
+                .json(&serde_json::json!({ "enabled": enabled }))
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => resp
+                    .json::<studio_gateway::GatewayStatus>()
+                    .await
+                    .map_err(|e| e.to_string()),
+                Ok(resp) => Err(format!("server returned {}", resp.status())),
+                Err(e) => Err(e.to_string()),
+            };
+            let _ = tx.send(BackgroundEvent::GatewayStatus(result));
+        });
+    }
+
     pub fn spawn_status_refresh(&self) {
         let tx = self.sender();
         let base = self.control_base();
@@ -297,6 +355,25 @@ impl App {
             {
                 let _ = tx.send(BackgroundEvent::StatusRefresh(list));
             }
+        });
+    }
+
+    /// Fetches the captured stderr tail for a child from the control API
+    /// (`Supervisor::log_tail` via `/control/log/{id}`) — a short-lived
+    /// request like `spawn_status_refresh`, not the long-held attach socket.
+    pub fn spawn_log_tail_fetch(&self, id: u64) {
+        let tx = self.sender();
+        let base = self.control_base();
+        tokio::spawn(async move {
+            let client = reqwest::Client::new();
+            let result = match client.get(format!("{base}/control/log/{id}")).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    resp.text().await.map_err(|e| e.to_string())
+                }
+                Ok(resp) => Err(format!("server returned {}", resp.status())),
+                Err(e) => Err(e.to_string()),
+            };
+            let _ = tx.send(BackgroundEvent::LogTail { id, result });
         });
     }
 
@@ -486,6 +563,17 @@ impl App {
                 self.tts.play_latest();
             }
             BackgroundEvent::TtsError(err) => self.tts.fail(&err),
+            BackgroundEvent::LogTail { id, result } => {
+                if self.ready.id == Some(id) {
+                    self.ready.log_tail = Some(result);
+                }
+            }
+            BackgroundEvent::GatewayStatus(result) => match result {
+                Ok(status) => self.gateway_status = Some(status),
+                Err(err) => {
+                    self.message = Some(Message::error(format!("public access: {err}")));
+                }
+            },
         }
     }
 
@@ -618,6 +706,22 @@ async fn termination_signal() {
     std::future::pending::<()>().await;
 }
 
+async fn fetch_gateway_status(control_base: &str) -> Result<studio_gateway::GatewayStatus, String> {
+    let client = reqwest::Client::new();
+    match client
+        .get(format!("{control_base}/control/gateway/public"))
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => resp
+            .json::<studio_gateway::GatewayStatus>()
+            .await
+            .map_err(|e| e.to_string()),
+        Ok(resp) => Err(format!("server returned {}", resp.status())),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 #[cfg(test)]
 impl App {
     /// `render` is the event loop's own private business; the preview tests need
@@ -656,6 +760,8 @@ impl App {
             last_running: Vec::new(),
             known_ports: HashMap::new(),
             child_is_tts: HashMap::new(),
+            gateway_status: None,
+            local_ip: None,
             theme: Theme::from_name(studio_core::config::ThemeName::Crane),
             tick: 3,
             started: Instant::now(),

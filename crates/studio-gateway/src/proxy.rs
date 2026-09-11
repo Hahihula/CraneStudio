@@ -9,9 +9,12 @@
 
 use std::time::Duration;
 
+use std::sync::Arc;
+
 use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -25,12 +28,57 @@ pub const DEFAULT_GATEWAY_PORT: u16 = 1234;
 
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(300);
 
-pub fn router() -> Router<std::sync::Arc<GatewayState>> {
+/// Builds the fully-stated gateway router, with the auth-token check (§10.1)
+/// layered in — takes `state` directly (rather than the more usual
+/// `Router::with_state` at the call site) because `from_fn_with_state` needs
+/// the actual `Arc<GatewayState>` value to compare tokens against, not just
+/// its type.
+pub fn router(state: Arc<GatewayState>) -> Router {
     Router::new()
         .route("/v1/models", get(list_models))
         .route("/register", post(register))
         .route("/restart", post(restart))
         .fallback(proxy)
+        .layer(middleware::from_fn_with_state(state.clone(), require_auth))
+        .with_state(state)
+}
+
+/// PLAN.md §10.1: LAN exposure "must require a bearer token." A `None`
+/// `auth_token` (the loopback default) means every request passes through
+/// unchecked, matching today's no-auth behavior.
+async fn require_auth(
+    State(state): State<Arc<GatewayState>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let Some(token) = state.auth_token() else {
+        return next.run(request).await;
+    };
+    let provided = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+    match provided {
+        Some(provided) if constant_time_eq(provided.as_bytes(), token.as_bytes()) => {
+            next.run(request).await
+        }
+        _ => (
+            StatusCode::UNAUTHORIZED,
+            "missing or invalid bearer token",
+        )
+            .into_response(),
+    }
+}
+
+/// Avoids leaking the token's length/prefix through response-time timing —
+/// cheap insurance for a value that's otherwise typed into a header once
+/// per client setup.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 #[derive(Deserialize)]
@@ -287,7 +335,7 @@ mod tests {
     async fn spawn_gateway(state: Arc<GatewayState>) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let app: Router = router().with_state(state);
+        let app: Router = router(state);
         tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         });
@@ -323,6 +371,66 @@ mod tests {
             .map(|m| m["id"].as_str().unwrap())
             .collect();
         assert_eq!(ids, vec!["configured-only"]);
+    }
+
+    #[tokio::test]
+    async fn no_auth_token_configured_lets_requests_through_unchecked() {
+        let state = test_state();
+        state
+            .registry
+            .register("configured-only".to_string(), spec("configured-only", 0));
+        let addr = spawn_gateway(state).await;
+
+        let resp = reqwest::Client::new()
+            .get(format!("http://{addr}/v1/models"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn a_configured_auth_token_rejects_requests_without_it() {
+        let state = test_state();
+        state.set_auth_token(Some("secret-token".to_string()));
+        let addr = spawn_gateway(state).await;
+
+        let resp = reqwest::Client::new()
+            .get(format!("http://{addr}/v1/models"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn a_configured_auth_token_rejects_the_wrong_bearer_value() {
+        let state = test_state();
+        state.set_auth_token(Some("secret-token".to_string()));
+        let addr = spawn_gateway(state).await;
+
+        let resp = reqwest::Client::new()
+            .get(format!("http://{addr}/v1/models"))
+            .bearer_auth("wrong-token")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn a_configured_auth_token_accepts_the_matching_bearer_value() {
+        let state = test_state();
+        state.set_auth_token(Some("secret-token".to_string()));
+        let addr = spawn_gateway(state).await;
+
+        let resp = reqwest::Client::new()
+            .get(format!("http://{addr}/v1/models"))
+            .bearer_auth("secret-token")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[tokio::test]

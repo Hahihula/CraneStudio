@@ -72,7 +72,7 @@ async fn free_port() -> u16 {
 async fn spawn_gateway(state: Arc<GatewayState>) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let app = studio_gateway::gateway_router().with_state(state);
+    let app = studio_gateway::gateway_router(state);
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });

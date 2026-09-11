@@ -10,8 +10,10 @@ name = "studio_gateway"
 path = "src/lib.rs"
 
 [dependencies]
+anyhow.workspace = true
 axum = { version = "0.8.9", features = ["ws"] }
 futures-util = "0.3.34"
+rand.workspace = true
 reqwest = { version = "0.13.4", features = ["json"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

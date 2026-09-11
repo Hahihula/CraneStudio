@@ -248,6 +248,21 @@ fn preferred_gateway_port() -> u16 {
         .unwrap_or(studio_gateway::DEFAULT_GATEWAY_PORT)
 }
 
+/// PLAN.md §10.1: the gateway defaults to loopback; LAN exposure is an
+/// explicit opt-in, toggleable at runtime from the TUI (`/control/gateway/public`)
+/// without disturbing the control API or any running model — this env var
+/// only controls the value at daemon *startup*, for scripts/automation that
+/// want to start already-public. The control API itself is never affected —
+/// it always stays on `127.0.0.1`, since it can start/kill arbitrary local
+/// processes and has no auth story of its own.
+fn preferred_gateway_host() -> String {
+    std::env::var("CRANESTUDIO_GATEWAY_HOST").unwrap_or_else(|_| "127.0.0.1".to_string())
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    host == "127.0.0.1" || host == "localhost" || host == "::1"
+}
+
 // Client commands (status/stop/attach/launch/register) need to find
 // wherever the daemon actually ended up, which may not be the preferred
 // port above if it had to fall forward — see `studio_core::endpoints`.
@@ -256,26 +271,6 @@ fn control_base_url() -> String {
         "http://127.0.0.1:{}",
         studio_core::endpoints::resolve_control_port(studio_gateway::DEFAULT_CONTROL_PORT)
     )
-}
-
-const MAX_PORT_ATTEMPTS: u16 = 20;
-
-/// Binds `preferred`, or the next free port after it (up to `max_tries`
-/// attempts) if that one's already taken — PLAN.md §7.4: "port in use →
-/// retry on a different port automatically," applied to the daemon's own
-/// listening ports rather than hard-failing the whole daemon over a
-/// collision with something unrelated (LM Studio's default is also :1234).
-async fn bind_with_fallback(
-    preferred: u16,
-    max_tries: u16,
-) -> anyhow::Result<(tokio::net::TcpListener, u16)> {
-    for offset in 0..max_tries {
-        let port = preferred.saturating_add(offset);
-        if let Ok(listener) = tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
-            return Ok((listener, port));
-        }
-    }
-    anyhow::bail!("could not find a free port starting from {preferred} after {max_tries} attempts")
 }
 
 async fn run_daemon() -> anyhow::Result<()> {
@@ -293,31 +288,54 @@ async fn run_daemon() -> anyhow::Result<()> {
 
     let supervisor = studio_supervisor::Supervisor::new().with_pidfile(pidfile);
     let (daemon, mut shutdown_rx) = studio_gateway::Daemon::new(supervisor);
+
+    let gateway_host = preferred_gateway_host();
+    let lan_exposed = !is_loopback_host(&gateway_host);
+    let auth_token = lan_exposed.then(|| {
+        std::env::var("CRANESTUDIO_AUTH_TOKEN")
+            .unwrap_or_else(|_| studio_gateway::generate_auth_token())
+    });
     let gateway_state = studio_gateway::GatewayState::new(daemon.clone());
+    gateway_state.set_auth_token(auth_token.clone());
+
+    let (gateway_bind_tx, gateway_bind_rx) = tokio::sync::watch::channel(gateway_host.clone());
+    daemon.attach_gateway(gateway_state.clone(), gateway_bind_tx);
 
     let control_app = studio_gateway::router(daemon);
-    let gateway_app = studio_gateway::gateway_router().with_state(gateway_state);
+    let gateway_app = studio_gateway::gateway_router(gateway_state.clone());
 
-    let (control_listener, control_port) =
-        bind_with_fallback(preferred_control_port(), MAX_PORT_ATTEMPTS).await?;
-    let (gateway_listener, gateway_port) =
-        bind_with_fallback(preferred_gateway_port(), MAX_PORT_ATTEMPTS).await?;
+    // The control API always stays loopback-only (§10.1) — only the
+    // gateway's bind host is toggleable (at startup here, or live from the
+    // TUI via `/control/gateway/public` — see `serve_with_rebind`).
+    let (control_listener, control_port) = studio_gateway::bind_with_fallback(
+        "127.0.0.1",
+        preferred_control_port(),
+        studio_gateway::MAX_PORT_ATTEMPTS,
+    )
+    .await?;
     println!("control API listening on 127.0.0.1:{control_port}");
-    println!("gateway (/v1/*) listening on 127.0.0.1:{gateway_port}");
-    studio_core::endpoints::save(studio_core::endpoints::Endpoints {
-        control_port,
-        gateway_port,
-    });
+    if let Some(token) = &auth_token {
+        println!();
+        println!(
+            "WARNING: the gateway is bound to {gateway_host} — reachable from other machines on your network. Anyone who can reach it can use your GPU and read your prompts."
+        );
+        println!("Requests must include:  Authorization: Bearer {token}");
+        println!();
+    }
 
-    let mut gateway_shutdown_rx = shutdown_rx.clone();
+    let gateway_shutdown_rx = shutdown_rx.clone();
     let control_server =
         axum::serve(control_listener, control_app).with_graceful_shutdown(async move {
             let _ = shutdown_rx.changed().await;
         });
-    let gateway_server =
-        axum::serve(gateway_listener, gateway_app).with_graceful_shutdown(async move {
-            let _ = gateway_shutdown_rx.changed().await;
-        });
+    let gateway_server = studio_gateway::serve_with_rebind(
+        gateway_app,
+        gateway_state,
+        control_port,
+        preferred_gateway_port(),
+        gateway_bind_rx,
+        gateway_shutdown_rx,
+    );
 
     let (control_result, gateway_result) = tokio::join!(control_server, gateway_server);
     studio_core::endpoints::clear();

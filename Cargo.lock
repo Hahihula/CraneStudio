@@ -5545,8 +5545,10 @@ dependencies = [
 name = "studio-gateway"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "axum",
  "futures-util",
+ "rand 0.9.5",
  "reqwest 0.13.4",
  "serde",
  "serde_json",
