@@ -144,8 +144,16 @@ SSE event grammar. The translator is CraneStudio's job, scheduled for v1.1.
 
 ### 2.5 GPU support is compile-time, not runtime
 
-Cargo features flow `crane-core` → `crane` → `crane-serve`:
-`cuda`, `cudnn`, `mkl`, `metal`, `accelerate`, `onnx`, `rocm`.
+As of the `lucasjinreal/Crane` pin at `193509f` (upstream PR #134, "candle
+multiple backend support"), backend selection runs through a facade module,
+`crane-core/src/candle_backend.rs`, `include!`d at the crate root. Each
+backend is a *renamed* copy of the `candle-core`/`candle-nn`/
+`candle-transformers` packages (`candle-core-default`, `-rocm`, `-sycl`, ...)
+declared in the workspace `Cargo.toml`; the facade `#[cfg]`-picks one and
+re-`extern crate`s it as the plain `candle_core` name, so call sites never
+change per backend. Cargo features still flow `crane-core` → `crane` →
+`crane-serve` → CraneStudio: `cuda`, `cudnn`, `mkl`, `metal`, `accelerate`,
+`onnx`, `rocm`, and now `sycl`.
 
 - **CUDA:** `crane-core/build.rs` compiles `crane-core/kernels/cuda/*.cu` via
   `bindgen_cuda` at build time. Needs `nvcc`. Crane's CI pins
@@ -153,14 +161,21 @@ Cargo features flow `crane-core` → `crane` → `crane-serve`:
   cards.
 - **Metal:** macOS. Auto-enabled for `aarch64-apple-darwin` in `crane-core`'s
   target-specific deps.
-- **ROCm:** `crane-core`'s `rocm` feature is literally `rocm = []` with the
-  comment *"candle 0.11 on crates.io has no `rocm` feature, so this can't
-  forward to `candle-core/rocm` yet"* — yet `crane-serve/src/engine/memory.rs`
-  calls `candle_core::rocm_backend::rocm_rs::hip::memory_info()`. A ROCm build
-  therefore requires a patched candle. Additionally, per the 2026.08.01 README
-  entry, the ROCm build **compiles kernels with `hipcc` on the user's machine at
-  first use** and caches the code object. **ROCm is not ready. Do not ship it in
-  v1.** Design so it can be added later (§13).
+- **ROCm:** now backed by a real fork (`xmiksay/candle`, branch
+  `feat/rocm-backend`) behind the `rocm` feature, rather than the empty
+  `rocm = []` stub from before PR #134. Still experimental upstream, and
+  CraneStudio does nothing with it beyond forwarding the feature flag (no
+  hardware detection). Treat as **not ready for v1** until proven otherwise.
+- **SYCL (Intel oneAPI, incl. Battlemage/Arc B-series):** new with PR #134.
+  Backed by `Hahihula/candle`, branch `sycle-support` — proof-of-concept,
+  upstream-experimental. `crates/cranestudio/Cargo.toml` forwards
+  `sycl = ["crane-serve/sycl"]`, but like `rocm` it must be built with
+  `--no-default-features --features sycl` (see `crane-core/Cargo.toml`'s
+  `default-backend` comment on why the plain backend and a fork backend
+  shouldn't both be pulled in). CraneStudio has **no Intel GPU hardware
+  detection** yet — `studio-core/src/hardware/gpu/` only has `cuda.rs` and
+  `metal.rs`. Battlemage support beyond the bare feature flag is future work
+  (§13), to be validated on real Arc B-series hardware.
 
 **Consequence:** "one prebuilt binary" is really a release matrix. See §12.
 
@@ -1546,26 +1561,33 @@ CPU-only build. Do not attempt GPU tests in CI.
 
 ---
 
-## 13. Keeping the doors open for CPU-only and ROCm
+## 13. Keeping the doors open for CPU-only, ROCm, and SYCL
 
-Neither ships in v1, but nothing may be designed in a way that blocks them:
+None ship in v1, but nothing may be designed in a way that blocks them:
 
-- `Backend` is an enum (`Cuda | Metal | Cpu | Rocm`) from the start, not a
-  boolean. Every backend-conditional code path matches on it exhaustively so
-  adding a variant produces compile errors at exactly the sites needing work.
+- `Backend` is an enum (`Cuda | Metal | Cpu | Rocm | Sycl`) from the start,
+  not a boolean. Every backend-conditional code path matches on it
+  exhaustively so adding a variant produces compile errors at exactly the
+  sites needing work.
 - The estimator takes backend-specific constants (context overhead, correction
   factors) from a table keyed by `Backend`, not from `#[cfg]` blocks.
 - Hardware probing has a per-backend trait implementation. Adding ROCm means
   adding one impl (and it can crib from
-  `crane/src/utils.rs::rocm_gpu_memory_info`).
-- Measurement DB keys already include the backend (§7.3), so ROCm data will not
-  contaminate CUDA predictions.
+  `crane/src/utils.rs::rocm_gpu_memory_info`). Adding SYCL means one for
+  Intel/Battlemage — see §2.5; nothing exists for it yet in
+  `studio-core/src/hardware/gpu/`.
+- Measurement DB keys already include the backend (§7.3), so ROCm/SYCL data
+  will not contaminate CUDA predictions.
 - Catalog `measured` blocks are keyed by backend string
-  (`cuda_sm86`, `metal_m3`, `rocm_gfx1101`, `cpu`).
+  (`cuda_sm86`, `metal_m3`, `rocm_gfx1101`, `sycl_bmg`, `cpu`).
 - The CPU path needs an honest UX: a 9B model on CPU is ~2 t/s. Show the
   predicted rate and let the user decide, rather than letting them discover it.
 - **ROCm additionally needs a first-run check for `hipcc`** (§2.5) with a clear
   message if absent, since kernels compile on the user's machine.
+- **SYCL is upstream-experimental** (§2.5) on a fork carrying its own branch
+  name (`sycle-support`) — pin it explicitly rather than trusting it stays in
+  sync with `main`, and re-verify it against a fresh Crane pin each time that
+  pin moves.
 
 ---
 
