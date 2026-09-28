@@ -32,3 +32,9 @@ accelerate = ["crane-serve/accelerate"]
 rocm = ["crane-serve/rocm"]
 cudnn = ["crane-serve/cudnn"]
 mkl = ["crane-serve/mkl"]
+# Intel oneAPI/SYCL backend (proof-of-concept upstream, PR #134). Needed for
+# Battlemage (Arc B-series) GPUs. Like `rocm`, build with
+# `--no-default-features --features sycl` — see crane-core's Cargo.toml
+# `default-backend` comment. No hardware detection on the CraneStudio side
+# yet (§2.5, §13 in PLAN.md); studio-core has no Intel GPU prober.
+sycl = ["crane-serve/sycl"]

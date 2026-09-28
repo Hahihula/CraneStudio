@@ -166,58 +166,6 @@
             ],
         ),
         (
-            id: "qwen3.8-27b",
-            display_name: "Qwen 3.8 27B",
-            family: "qwen3_5",
-            model_type: "qwen3_5",
-            // Same hybrid GDN + attention architecture as Qwen 3.5, scaled
-            // up — declares `model_type: "qwen3_5"` on real checkpoints
-            // (§2.12), so it launches with the same `--model-type qwen3_5`.
-            params: 27000000000,
-            native_context: 262144,
-            capabilities: [Text, Tools],
-            license: "apache-2.0",
-            gated: false,
-            supports: (
-                isq: true,
-                kv_quant: true,
-                kv_swap: false,
-                vision: false,
-            ),
-            variants: [
-                (
-                    id: "qwen3.8-27b-ud-q4_k_m",
-                    repo: "unsloth/Qwen3.8-27B-GGUF",
-                    // A later revision than the Q5_K_S variant below: the
-                    // repo has been rebuilt since, and this file only exists
-                    // at the newer sha. Variants pin independently, so the
-                    // tested one keeps pointing at what was tested.
-                    revision: "4ca720788d1e01f1bff70c033e0d0028fd02e502",
-                    files: ["Qwen3.8-27B-UD-Q4_K_M.gguf"],
-                    format: Gguf,
-                    // Unsloth "dynamic" quant — mixed precision per tensor,
-                    // not a plain llama.cpp Q4_K_M. Named as published so
-                    // the launch label matches the file on disk.
-                    quant: Some("UD-Q4_K_M"),
-                    download_bytes: 16464440224,
-                    // PENDING LAUNCH CHECK
-                    measured: {},
-                ),
-                (
-                    id: "qwen3.8-27b-q5_k_s",
-                    repo: "unsloth/Qwen3.8-27B-GGUF",
-                    revision: "f1bfb127c64f7072bdd2cad55f258b9c8b2910fe",
-                    files: ["Qwen3.8-27B-Q5_K_S.gguf"],
-                    format: Gguf,
-                    quant: Some("Q5_K_S"),
-                    download_bytes: 19270036448,
-                    // Smoke-tested only (health check + a real chat
-                    // completion) — no depth run yet.
-                    measured: {},
-                ),
-            ],
-        ),
-        (
             id: "ornith-1.0-9b",
             display_name: "Ornith 1.0 9B",
             family: "qwen3_5",

@@ -286,13 +286,17 @@ impl App {
         });
     }
 
-    /// Walks the models directory *and* stats every candidate, so it runs off
-    /// the render thread — a cold directory of large GGUFs is not instant.
+    /// Walks the models directory and every linked path (§8.3), stats every
+    /// candidate, so it runs off the render thread — a cold directory of
+    /// large GGUFs is not instant.
     fn spawn_local_scan(&self) {
         let tx = self.sender();
         tokio::spawn(async move {
             let models = tokio::task::spawn_blocking(|| {
-                crate::models::collect(&studio_core::paths::models_dir())
+                let config = studio_core::config::Config::load(
+                    &studio_core::paths::config_dir().join("config.ron"),
+                );
+                crate::models::collect(&studio_core::paths::models_dir(), &config.linked_paths)
             })
             .await
             .unwrap_or_default();
@@ -305,6 +309,48 @@ impl App {
     pub fn rescan_models(&mut self) {
         self.local_scan_done = false;
         self.spawn_local_scan();
+    }
+
+    /// §8.3's "add local path" action: remembers `path` in `config.ron` so
+    /// it's scanned alongside the models directory from now on, then
+    /// rescans immediately.
+    ///
+    /// # Errors
+    /// A message to show the user (never a crash) when `path` doesn't
+    /// exist, is already linked, or `config.ron` can't be saved.
+    pub fn link_local_path(&mut self, path: &std::path::Path) -> Result<(), String> {
+        if !path.exists() {
+            return Err(format!("{} does not exist", path.display()));
+        }
+        let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let config_path = studio_core::paths::config_dir().join("config.ron");
+        let mut config = studio_core::config::Config::load(&config_path);
+        if !config.link_path(path) {
+            return Err("that path is already linked".to_string());
+        }
+        config
+            .save(&config_path)
+            .map_err(|e| format!("couldn't save config: {e}"))?;
+        self.rescan_models();
+        Ok(())
+    }
+
+    /// Removes a path added with `link_local_path`, then rescans.
+    ///
+    /// # Errors
+    /// A message to show the user when `path` wasn't linked, or
+    /// `config.ron` can't be saved.
+    pub fn unlink_local_path(&mut self, path: &std::path::Path) -> Result<(), String> {
+        let config_path = studio_core::paths::config_dir().join("config.ron");
+        let mut config = studio_core::config::Config::load(&config_path);
+        if !config.unlink_path(path) {
+            return Err("that path wasn't linked".to_string());
+        }
+        config
+            .save(&config_path)
+            .map_err(|e| format!("couldn't save config: {e}"))?;
+        self.rescan_models();
+        Ok(())
     }
 
     /// PLAN.md §10.1: fetches whether the gateway is currently loopback-only

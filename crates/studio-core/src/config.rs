@@ -6,7 +6,7 @@
 
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -65,6 +65,11 @@ pub struct Config {
     /// here.
     #[serde(default)]
     pub theme: ThemeName,
+    /// Filesystem paths outside the models directory that the user has
+    /// explicitly linked in via the Local tab's "add path" action (§8.3),
+    /// scanned alongside the models directory on every local scan.
+    #[serde(default)]
+    pub linked_paths: Vec<PathBuf>,
 }
 
 impl Default for Config {
@@ -76,6 +81,7 @@ impl Default for Config {
             max_tokens: default_max_tokens(),
             temperature: default_temperature(),
             theme: ThemeName::default(),
+            linked_paths: Vec::new(),
         }
     }
 }
@@ -149,6 +155,26 @@ impl Config {
         fs::write(path, text)?;
         restrict_permissions(path)
     }
+
+    /// Adds `path` to the linked paths. Returns `false` (no-op) if it was
+    /// already there — callers use this to distinguish "linked" from
+    /// "already linked" for the UI message.
+    pub fn link_path(&mut self, path: PathBuf) -> bool {
+        if self.linked_paths.contains(&path) {
+            false
+        } else {
+            self.linked_paths.push(path);
+            true
+        }
+    }
+
+    /// Removes `path` from the linked paths. Returns `false` if it wasn't
+    /// there.
+    pub fn unlink_path(&mut self, path: &Path) -> bool {
+        let before = self.linked_paths.len();
+        self.linked_paths.retain(|p| p != path);
+        self.linked_paths.len() != before
+    }
 }
 
 #[cfg(unix)]
@@ -203,6 +229,32 @@ mod tests {
         assert_eq!(config.max_tokens, DEFAULT_MAX_TOKENS);
         assert!((config.temperature - DEFAULT_TEMPERATURE).abs() < f64::EPSILON);
         assert_eq!(config.theme, ThemeName::Crane);
+    }
+
+    #[test]
+    fn link_path_dedupes_and_unlink_path_removes() {
+        let mut config = Config::default();
+        let path = PathBuf::from("/mnt/models/some-checkpoint");
+
+        assert!(config.link_path(path.clone()));
+        assert!(!config.link_path(path.clone()), "re-linking should no-op");
+        assert_eq!(config.linked_paths, vec![path.clone()]);
+
+        assert!(config.unlink_path(&path));
+        assert!(config.linked_paths.is_empty());
+        assert!(!config.unlink_path(&path), "unlinking twice should no-op");
+    }
+
+    #[test]
+    fn linked_paths_round_trip() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("config.ron");
+        let mut config = Config::default();
+        config.link_path(PathBuf::from("/mnt/models/foo"));
+        config.save(&path).unwrap();
+
+        let loaded = Config::load(&path);
+        assert_eq!(loaded.linked_paths, vec![PathBuf::from("/mnt/models/foo")]);
     }
 
     #[test]

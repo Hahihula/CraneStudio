@@ -15,12 +15,7 @@ license = "MIT"
 repository = "https://github.com/hahihula/CraneStudio"
 
 [workspace.dependencies]
-# lucasjinreal/Crane main @ 2026-08-17. Includes:
-#   PR  #99 — Qwen 3.5 GGUF long-prompt quant fix
-#   PR #100 — Qwen 3.6 / 3.8 (27B) support
-#   PR #102 — OpenAI tool calling in crane-serve
-# crane-serve = { git = "https://github.com/lucasjinreal/Crane", rev = "a3d338695f1105742a995ec2a2313b20e28f2844" }
-crane-serve = { git = "https://github.com/Hahihula/Crane", rev = "5845d689e9a399259197b63d63358f1d82355dc9" }
+crane-serve = { git = "https://github.com/lucasjinreal/Crane", rev = "193509f98ac671d419b1802d9536cdda3dac0d61" }
 
 
 anyhow = "1.0"

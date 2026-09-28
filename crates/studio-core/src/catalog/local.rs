@@ -1,6 +1,7 @@
-//! Local filesystem model scan, per PLAN.md §8.3: walk the models directory
-//! (plus, in the TUI, an explicit "add local path" action not modeled
-//! here), and run the same classification logic §8.2 uses on HF search
+//! Local filesystem model scan, per PLAN.md §8.3: walk the models directory,
+//! or any other path the TUI's "add local path" action points `scan` at
+//! (`LocalCandidate::linked_root` tags which, but scanning itself doesn't
+//! care), and run the same classification logic §8.2 uses on HF search
 //! results, so a local checkpoint gets exactly the same verdict a remote
 //! one would.
 
@@ -16,6 +17,13 @@ pub struct LocalCandidate {
     pub path: PathBuf,
     pub format: Format,
     pub classification: Classification,
+    /// Set by the caller (not by `scan` itself, which has no notion of
+    /// this) when this candidate came from scanning a user-linked path
+    /// (§8.3's "add local path" action) rather than the models directory —
+    /// the *registered* path, which may be an ancestor of `path` when a
+    /// linked directory holds several checkpoints. `None` for a plain
+    /// models-directory candidate.
+    pub linked_root: Option<PathBuf>,
 }
 
 const MAX_DEPTH: usize = 6;
@@ -100,6 +108,7 @@ fn classify_safetensors_dir(path: &Path) -> LocalCandidate {
         path: path.to_path_buf(),
         format: Format::Safetensors,
         classification,
+        linked_root: None,
     }
 }
 
@@ -121,6 +130,7 @@ fn classify_gguf_file(path: &Path) -> LocalCandidate {
         path: path.to_path_buf(),
         format: Format::Gguf,
         classification,
+        linked_root: None,
     }
 }
 

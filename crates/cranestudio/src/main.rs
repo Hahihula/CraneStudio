@@ -119,7 +119,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Some(Command::Serve(args)) => {
-            crane_serve::init_logging();
+            crane_serve::init_logging(args.log_level.as_deref())?;
             crane_serve::run(*args).await
         }
         Some(Command::Doctor) => {
