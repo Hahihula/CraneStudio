@@ -89,6 +89,7 @@ fn local(
         candidate: LocalCandidate {
             path,
             format: Format::Gguf,
+            linked_root: None,
             classification: if supported {
                 Classification::Supported {
                     // A borrowed &'static str in the real type; the previews only

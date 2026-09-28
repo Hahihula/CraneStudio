@@ -25,7 +25,16 @@ const HINTS: &[(&str, &str)] = &[
     ("/", "search"),
     ("esc", "back"),
 ];
+const LOCAL_HINTS: &[(&str, &str)] = &[
+    ("tab", "catalog / local / search"),
+    ("↑↓", "select"),
+    ("⏎", "get it"),
+    ("a", "add path"),
+    ("d", "unlink"),
+    ("esc", "back"),
+];
 const SEARCH_HINTS: &[(&str, &str)] = &[("⏎", "search"), ("esc", "cancel")];
+const PATH_HINTS: &[(&str, &str)] = &[("⏎", "link"), ("esc", "cancel")];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
@@ -65,6 +74,10 @@ pub struct State {
     pub search_query: String,
     pub editing_query: bool,
     pub searching: bool,
+    /// Editing the "add local path" prompt (§8.3), analogous to
+    /// `editing_query` for search.
+    pub adding_path: bool,
+    pub path_input: String,
     pub selected: usize,
     list: ListState,
 }
@@ -80,6 +93,8 @@ impl Default for State {
             search_query: String::new(),
             editing_query: false,
             searching: false,
+            adding_path: false,
+            path_input: String::new(),
             selected: 0,
             list: ListState::default(),
         }
@@ -115,10 +130,23 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
     if app.browser.editing_query {
         return handle_query_input(app, key);
     }
+    if app.browser.adding_path {
+        return handle_path_input(app, key);
+    }
 
     match key.code {
         KeyCode::Esc => {
             app.screen = crate::app::Screen::Launchpad;
+            true
+        }
+        KeyCode::Char('a') if app.browser.tab == Tab::Local => {
+            app.message = None;
+            app.browser.path_input.clear();
+            app.browser.adding_path = true;
+            true
+        }
+        KeyCode::Char('d') | KeyCode::Delete if app.browser.tab == Tab::Local => {
+            unlink_selected(app);
             true
         }
         KeyCode::Tab | KeyCode::Right => {
@@ -177,6 +205,56 @@ fn handle_query_input(app: &mut App, key: KeyEvent) -> bool {
         _ => {}
     }
     true
+}
+
+fn handle_path_input(app: &mut App, key: KeyEvent) -> bool {
+    match key.code {
+        KeyCode::Esc => app.browser.adding_path = false,
+        KeyCode::Enter => {
+            app.browser.adding_path = false;
+            let raw = app.browser.path_input.trim();
+            if !raw.is_empty() {
+                let expanded = studio_core::paths::expand_tilde(raw);
+                match app.link_local_path(&expanded) {
+                    Ok(()) => {
+                        app.message = Some(Message::info(format!("linked {}", expanded.display())));
+                    }
+                    Err(e) => app.message = Some(Message::error(e)),
+                }
+            }
+            app.browser.path_input.clear();
+        }
+        KeyCode::Backspace => {
+            app.browser.path_input.pop();
+        }
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return false,
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.browser.path_input.push(c);
+        }
+        _ => {}
+    }
+    true
+}
+
+/// `d` on the Local tab: only a candidate that came from a linked path (not
+/// one found under the models directory itself) can be unlinked here —
+/// removing a models-directory entry would mean deleting the file, which
+/// this key does not do.
+fn unlink_selected(app: &mut App) {
+    app.message = None;
+    let Some(candidate) = app.browser.local.get(app.browser.selected).cloned() else {
+        return;
+    };
+    let Some(root) = candidate.linked_root.clone() else {
+        app.message = Some(Message::error(
+            "only a linked path can be removed with d — models-directory files live on disk",
+        ));
+        return;
+    };
+    match app.unlink_local_path(&root) {
+        Ok(()) => app.message = Some(Message::info(format!("unlinked {}", root.display()))),
+        Err(e) => app.message = Some(Message::error(e)),
+    }
 }
 
 fn spawn_search(app: &App) {
@@ -247,6 +325,10 @@ fn select_current(app: &mut App) {
 pub fn render(app: &mut App, frame: &mut Frame) {
     let hints = if app.browser.editing_query {
         SEARCH_HINTS
+    } else if app.browser.adding_path {
+        PATH_HINTS
+    } else if app.browser.tab == Tab::Local {
+        LOCAL_HINTS
     } else {
         HINTS
     };
@@ -387,6 +469,10 @@ fn context_label(context: usize) -> String {
 }
 
 fn render_local(app: &mut App, frame: &mut Frame, area: Rect) {
+    if app.browser.adding_path {
+        render_path_prompt(app, frame, area);
+        return;
+    }
     if app.browser.local.is_empty() {
         waiting(app, frame, area, "scanning the models directory");
         return;
@@ -408,13 +494,18 @@ fn render_local(app: &mut App, frame: &mut Frame, area: Rect) {
                 || candidate.path.display().to_string(),
                 |n| n.to_string_lossy().to_string(),
             );
+            let right = if candidate.linked_root.is_some() {
+                vec![ui::badge(&app.theme, "linked", app.theme.accent)]
+            } else {
+                Vec::new()
+            };
             row(
                 &app.theme,
                 i == app.browser.selected,
                 inner.width,
                 Span::styled(mark.to_string(), Style::new().fg(color)),
                 &name,
-                Vec::new(),
+                right,
                 &format!(
                     "{}  ·  {}",
                     note.trim_start_matches(' '),
@@ -427,6 +518,37 @@ fn render_local(app: &mut App, frame: &mut Frame, area: Rect) {
         })
         .collect();
     render_list(app, frame, inner, items);
+}
+
+fn render_path_prompt(app: &App, frame: &mut Frame, area: Rect) {
+    let block = app
+        .theme
+        .block_focused("On disk  ·  add a path".to_string(), true);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    #[allow(clippy::cast_possible_truncation)]
+    let cursor_x = inner.x + 2 + app.browser.path_input.chars().count() as u16;
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(vec![
+                Span::styled(
+                    format!("{} ", glyph::ARROW),
+                    Style::new().fg(app.theme.accent),
+                ),
+                Span::styled(
+                    app.browser.path_input.clone(),
+                    Style::new().fg(app.theme.text),
+                ),
+            ]),
+            Line::from(Span::styled(
+                "a model file or a directory to scan for models, ⏎ to link it",
+                app.theme.muted_style(),
+            )),
+        ]),
+        inner,
+    );
+    frame.set_cursor_position((cursor_x.min(inner.right().saturating_sub(1)), inner.y));
 }
 
 fn render_search(app: &mut App, frame: &mut Frame, area: Rect) {

@@ -50,11 +50,25 @@ impl LocalModel {
     }
 }
 
-/// Scans `root` and enriches every candidate. Supported models sort first —
-/// the launchpad's whole point is that the top of the list is launchable.
+/// Scans `root` (the models directory) plus every user-linked path (§8.3's
+/// "add local path" action) and enriches every candidate. Supported models
+/// sort first — the launchpad's whole point is that the top of the list is
+/// launchable. A candidate reachable from both `root` and a linked path
+/// (the linked path is a subtree of `root`, or a duplicate link) is only
+/// kept once, in its `root`-relative form.
 #[must_use]
-pub fn collect(root: &Path) -> Vec<LocalModel> {
-    let mut models: Vec<LocalModel> = studio_core::catalog::local::scan(root)
+pub fn collect(root: &Path, linked_paths: &[std::path::PathBuf]) -> Vec<LocalModel> {
+    let mut candidates = studio_core::catalog::local::scan(root);
+    for linked in linked_paths {
+        for mut candidate in studio_core::catalog::local::scan(linked) {
+            candidate.linked_root = Some(linked.clone());
+            candidates.push(candidate);
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    candidates.retain(|c| seen.insert(c.path.clone()));
+
+    let mut models: Vec<LocalModel> = candidates
         .into_iter()
         .map(|candidate| describe(root, candidate))
         .collect();

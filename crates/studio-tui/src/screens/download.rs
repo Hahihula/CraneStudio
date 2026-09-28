@@ -245,6 +245,7 @@ fn known_candidate(
             gated: family.gated,
             audio: family.audio,
         },
+        linked_root: None,
     })
 }
 
