@@ -63,11 +63,7 @@ async fn require_auth(
         Some(provided) if constant_time_eq(provided.as_bytes(), token.as_bytes()) => {
             next.run(request).await
         }
-        _ => (
-            StatusCode::UNAUTHORIZED,
-            "missing or invalid bearer token",
-        )
-            .into_response(),
+        _ => (StatusCode::UNAUTHORIZED, "missing or invalid bearer token").into_response(),
     }
 }
 

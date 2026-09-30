@@ -54,6 +54,9 @@ variables:
   # Bullseye is glibc 2.31 (Debian 11 / Ubuntu 20.04 era) and still ships a
   # current rustup toolchain.
   RUST_IMAGE: "rust:1-bullseye"
+  # Checks (fmt/clippy/test) ship nothing, so they don't need the old glibc and
+  # can run on a supported Debian. Only the release builds keep RUST_IMAGE.
+  CHECK_IMAGE: "rust:1-trixie"
   # §12: no GPU on a build runner, so the compute capability can't be probed.
   CUDA_COMPUTE_CAP: "80"
 
@@ -77,10 +80,27 @@ variables:
   # CoreAudio/WASAPI (system, nothing to install) and skip this — apt is absent
   # there. Same "can't be dropped from our side" situation as NASM.
   - |
-    if command -v apt-get >/dev/null 2>&1 && [ "$(id -u)" = "0" ]; then
-      apt-get update -qq \
-        && apt-get install -y -qq --no-install-recommends libasound2-dev pkg-config \
-        || echo "WARN: could not install libasound2-dev — a shell runner must have it preinstalled"
+    # Fail here, with apt's own error, rather than 10 minutes later inside
+    # alsa-sys's build script. (Previously a failed install only printed a WARN
+    # that was easy to miss in the log.)
+    if [ "$(uname -s)" = "Linux" ] && ! pkg-config --exists alsa 2>/dev/null; then
+      SUDO=""
+      if [ "$(id -u)" != "0" ]; then SUDO="sudo"; fi
+      if command -v apt-get >/dev/null 2>&1; then
+        # Debian 11 is past end of life: bullseye-security has been pruned from
+        # deb.debian.org (its package index still lists files that now 404), so
+        # use the archive, which keeps the final point-release packages. The
+        # archive has no security suite, hence only `main`. This keeps the glibc
+        # 2.31 floor (§12) — switching the image to bookworm would raise it.
+        if grep -qs 'VERSION_CODENAME=bullseye' /etc/os-release; then
+          ${SUDO} rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources
+          echo "deb http://archive.debian.org/debian bullseye main" | ${SUDO} tee /etc/apt/sources.list >/dev/null
+          echo 'Acquire::Check-Valid-Until "false";' | ${SUDO} tee /etc/apt/apt.conf.d/99archive >/dev/null
+        fi
+        ${SUDO} apt-get update
+        ${SUDO} apt-get install -y --no-install-recommends libasound2-dev pkg-config
+      fi
+      pkg-config --exists alsa || { echo "ERROR: alsa.pc not found — install libasound2-dev (Debian/Ubuntu) or alsa-lib-devel on this runner"; exit 1; }
     fi
   - |
     if ! command -v cargo >/dev/null 2>&1; then
@@ -96,7 +116,7 @@ variables:
 
 check:fmt:
   stage: check
-  image: ${RUST_IMAGE}
+  image: ${CHECK_IMAGE}
   tags: [docker]
   cache: *cargo_cache
   before_script:
@@ -112,7 +132,7 @@ check:fmt:
 # Unlike Crane's CI, clippy is **gating** here (§2.17), pedantic included.
 check:clippy:
   stage: check
-  image: ${RUST_IMAGE}
+  image: ${CHECK_IMAGE}
   tags: [docker]
   cache: *cargo_cache
   before_script:
@@ -127,7 +147,7 @@ check:clippy:
 
 check:test:
   stage: check
-  image: ${RUST_IMAGE}
+  image: ${CHECK_IMAGE}
   tags: [docker]
   cache: *cargo_cache
   before_script:
@@ -151,7 +171,7 @@ check:test:
 # a push, because a HuggingFace outage is not a broken commit.
 check:catalog-live:
   stage: check
-  image: ${RUST_IMAGE}
+  image: ${CHECK_IMAGE}
   tags: [docker]
   cache: *cargo_cache
   before_script:
