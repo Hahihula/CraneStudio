@@ -73,8 +73,7 @@ pub async fn serve_with_rebind(
 ) -> anyhow::Result<()> {
     loop {
         let host = bind_rx.borrow_and_update().clone();
-        let (listener, port) =
-            bind_with_fallback(&host, preferred_port, MAX_PORT_ATTEMPTS).await?;
+        let (listener, port) = bind_with_fallback(&host, preferred_port, MAX_PORT_ATTEMPTS).await?;
         println!("gateway (/v1/*) listening on {host}:{port}");
         state.set_bound(host, port);
         studio_core::endpoints::save(studio_core::endpoints::Endpoints {

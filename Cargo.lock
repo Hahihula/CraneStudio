@@ -1302,7 +1302,7 @@ dependencies = [
 [[package]]
 name = "crane-ai"
 version = "26.9.0"
-source = "git+https://github.com/lucasjinreal/Crane?rev=193509f98ac671d419b1802d9536cdda3dac0d61#193509f98ac671d419b1802d9536cdda3dac0d61"
+source = "git+https://github.com/lucasjinreal/Crane?rev=3a59e3253c9c0c0d6a8f29f9d4cc1760683ce51d#3a59e3253c9c0c0d6a8f29f9d4cc1760683ce51d"
 dependencies = [
  "anyhow",
  "audioadapter-buffers",
@@ -1323,7 +1323,7 @@ dependencies = [
 [[package]]
 name = "crane-core"
 version = "26.9.0"
-source = "git+https://github.com/lucasjinreal/Crane?rev=193509f98ac671d419b1802d9536cdda3dac0d61#193509f98ac671d419b1802d9536cdda3dac0d61"
+source = "git+https://github.com/lucasjinreal/Crane?rev=3a59e3253c9c0c0d6a8f29f9d4cc1760683ce51d#3a59e3253c9c0c0d6a8f29f9d4cc1760683ce51d"
 dependencies = [
  "accelerate-src",
  "ahash",
@@ -1333,6 +1333,7 @@ dependencies = [
  "candle-core 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "candle-core 0.11.0 (git+https://github.com/xmiksay/candle?branch=feat%2Frocm-backend)",
  "candle-core 0.11.0 (git+https://github.com/Hahihula/candle?branch=sycle-support)",
+ "candle-metal-kernels",
  "candle-nn 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "candle-nn 0.11.0 (git+https://github.com/xmiksay/candle?branch=feat%2Frocm-backend)",
  "candle-nn 0.11.0 (git+https://github.com/Hahihula/candle?branch=sycle-support)",
@@ -1349,6 +1350,7 @@ dependencies = [
  "memmap2",
  "minijinja",
  "minijinja-contrib",
+ "objc2-metal",
  "ribo",
  "rustfft",
  "serde",
@@ -1361,7 +1363,7 @@ dependencies = [
 [[package]]
 name = "crane-serve"
 version = "26.9.0"
-source = "git+https://github.com/lucasjinreal/Crane?rev=193509f98ac671d419b1802d9536cdda3dac0d61#193509f98ac671d419b1802d9536cdda3dac0d61"
+source = "git+https://github.com/lucasjinreal/Crane?rev=3a59e3253c9c0c0d6a8f29f9d4cc1760683ce51d#3a59e3253c9c0c0d6a8f29f9d4cc1760683ce51d"
 dependencies = [
  "anyhow",
  "async-stream",

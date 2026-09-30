@@ -244,7 +244,14 @@ pub fn render(app: &mut TuiApp, frame: &mut Frame) {
     };
     #[allow(clippy::cast_possible_truncation)]
     let apps_height = (apps(app.ready.is_tts).len() * 2) as u16 + 2;
-    let [status_area, endpoint_area, public_area, logs_area, apps_area, _] = Layout::vertical([
+    let [
+        status_area,
+        endpoint_area,
+        public_area,
+        logs_area,
+        apps_area,
+        _,
+    ] = Layout::vertical([
         Constraint::Length(7),
         Constraint::Length(endpoint_height),
         Constraint::Length(public_height),
@@ -371,7 +378,10 @@ fn render_public(app: &TuiApp, frame: &mut Frame, area: Rect) {
 
     let Some(status) = &app.gateway_status else {
         frame.render_widget(
-            Paragraph::new(Line::from(Span::styled("checking…", app.theme.muted_style()))),
+            Paragraph::new(Line::from(Span::styled(
+                "checking…",
+                app.theme.muted_style(),
+            ))),
             inner,
         );
         return;
