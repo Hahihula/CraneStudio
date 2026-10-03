@@ -139,6 +139,25 @@ pub fn read_architecture<R: Read>(reader: &mut R) -> Option<String> {
     None
 }
 
+/// Parses llama.cpp's split-GGUF naming, `<name>-00001-of-00002.gguf`, into
+/// `(shard, count)`, both 1-based. Crane takes the first shard as the model
+/// path and finds the rest next to it; only that shard carries
+/// `general.architecture` and the model dimensions.
+#[must_use]
+pub fn split_shard(file_name: &str) -> Option<(u32, u32)> {
+    let stem = file_name
+        .strip_suffix(".gguf")
+        .or_else(|| file_name.strip_suffix(".GGUF"))?;
+    let (rest, count) = stem.rsplit_once("-of-")?;
+    let (_, shard) = rest.rsplit_once('-')?;
+    let is_index = |s: &str| s.len() == 5 && s.bytes().all(|b| b.is_ascii_digit());
+    if !is_index(shard) || !is_index(count) {
+        return None;
+    }
+    let (shard, count) = (shard.parse().ok()?, count.parse().ok()?);
+    (shard >= 1 && shard <= count).then_some((shard, count))
+}
+
 fn read_u32<R: Read>(r: &mut R) -> Option<u32> {
     let mut buf = [0u8; 4];
     r.read_exact(&mut buf).ok()?;
@@ -187,6 +206,19 @@ fn skip_value<R: Read>(r: &mut R, value_type: u32) -> Option<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn split_shard_parses_llama_cpp_split_names() {
+        assert_eq!(
+            split_shard("Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-00001-of-00002.gguf"),
+            Some((1, 2))
+        );
+        assert_eq!(split_shard("model-00002-of-00002.gguf"), Some((2, 2)));
+        assert_eq!(split_shard("Qwen3.5-9B-Q4_K_M.gguf"), None);
+        assert_eq!(split_shard("model-00003-of-00002.gguf"), None);
+        assert_eq!(split_shard("model-1-of-2.gguf"), None);
+        assert_eq!(split_shard("model-00001-of-00002.safetensors"), None);
+    }
 
     fn write_string(buf: &mut Vec<u8>, s: &str) {
         buf.extend_from_slice(&(s.len() as u64).to_le_bytes());

@@ -54,6 +54,17 @@ pub const FAMILIES: &[Family] = &[
         audio: false,
     },
     Family {
+        // Qwen4-Exp (Qwen3.8-Flash-Next). Crane loads it from GGUF only
+        // (`create_backend` bails on safetensors), so the config alias only
+        // matters for classifying HF search results.
+        model_type: "qwen4_exp",
+        config_aliases: &["qwen4_exp"],
+        gguf_architectures: &["qwen4exp"],
+        vision: false,
+        gated: false,
+        audio: false,
+    },
+    Family {
         model_type: "qwen3",
         config_aliases: &["qwen3"],
         gguf_architectures: &["qwen3", "qwen3moe"],
@@ -315,6 +326,15 @@ mod tests {
         assert_eq!(
             from_gguf_architecture("hunyuan-dense").unwrap().model_type,
             "hunyuan"
+        );
+        // Qwen 3.5 MoE (Ornith 35B-A3B) loads through the qwen3_5 backend.
+        assert_eq!(
+            from_gguf_architecture("qwen35moe").unwrap().model_type,
+            "qwen3_5"
+        );
+        assert_eq!(
+            from_gguf_architecture("qwen4exp").unwrap().model_type,
+            "qwen4_exp"
         );
         assert!(from_gguf_architecture("llama").is_none());
     }

@@ -241,7 +241,7 @@ mod tests {
         assert_eq!(config.linked_paths, vec![path.clone()]);
 
         assert!(config.unlink_path(&path));
-        assert!(config.linked_paths.is_empty());
+        assert_eq!(config.linked_paths, [] as [PathBuf; 0]);
         assert!(!config.unlink_path(&path), "unlinking twice should no-op");
     }
 
