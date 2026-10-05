@@ -15,7 +15,7 @@ license = "MIT"
 repository = "https://github.com/hahihula/CraneStudio"
 
 [workspace.dependencies]
-crane-serve = { git = "https://github.com/Hahihula/Crane", rev = "71e1d9f2fa5394e89fb8960bce87a44f02ddb84b" }
+crane-serve = { git = "https://github.com/lucasjinreal/Crane", rev = "322052be722ecacc8ba36b224baf9d77c3f3ecf4" }
 
 
 anyhow = "1.0"

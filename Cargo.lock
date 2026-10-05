@@ -1353,7 +1353,7 @@ dependencies = [
 [[package]]
 name = "crane-ai"
 version = "26.9.0"
-source = "git+https://github.com/Hahihula/Crane?rev=71e1d9f2fa5394e89fb8960bce87a44f02ddb84b#71e1d9f2fa5394e89fb8960bce87a44f02ddb84b"
+source = "git+https://github.com/lucasjinreal/Crane?rev=322052be722ecacc8ba36b224baf9d77c3f3ecf4#322052be722ecacc8ba36b224baf9d77c3f3ecf4"
 dependencies = [
  "anyhow",
  "audioadapter-buffers",
@@ -1374,7 +1374,7 @@ dependencies = [
 [[package]]
 name = "crane-core"
 version = "26.9.0"
-source = "git+https://github.com/Hahihula/Crane?rev=71e1d9f2fa5394e89fb8960bce87a44f02ddb84b#71e1d9f2fa5394e89fb8960bce87a44f02ddb84b"
+source = "git+https://github.com/lucasjinreal/Crane?rev=322052be722ecacc8ba36b224baf9d77c3f3ecf4#322052be722ecacc8ba36b224baf9d77c3f3ecf4"
 dependencies = [
  "accelerate-src",
  "ahash",
@@ -1415,7 +1415,7 @@ dependencies = [
 [[package]]
 name = "crane-serve"
 version = "26.9.0"
-source = "git+https://github.com/Hahihula/Crane?rev=71e1d9f2fa5394e89fb8960bce87a44f02ddb84b#71e1d9f2fa5394e89fb8960bce87a44f02ddb84b"
+source = "git+https://github.com/lucasjinreal/Crane?rev=322052be722ecacc8ba36b224baf9d77c3f3ecf4#322052be722ecacc8ba36b224baf9d77c3f3ecf4"
 dependencies = [
  "anyhow",
  "async-stream",

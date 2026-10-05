@@ -205,6 +205,28 @@ mod tests {
         }
     }
 
+    /// The wizard finds a launched file's default thinking level through
+    /// `entry_for_path`, wherever the file lives.
+    #[test]
+    fn launched_files_resolve_to_their_default_reasoning_effort() {
+        use crate::catalog::schema::ReasoningEffort;
+        let catalog = bundled();
+        let effort = |path: &str| {
+            catalog
+                .entry_for_path(std::path::Path::new(path))
+                .and_then(|m| m.reasoning_effort)
+        };
+        assert_eq!(
+            effort("/m/bytkim/Qwen3.8-27B-pi-GGUF/sha/Qwen3.8-27B-pi-Q4_K_M.gguf"),
+            Some(ReasoningEffort::Medium)
+        );
+        assert_eq!(
+            effort("/elsewhere/Swift-1.5-Qwen3.8-27B-Q4_K_M.gguf"),
+            Some(ReasoningEffort::Xhigh)
+        );
+        assert_eq!(effort("/m/Qwen3.5-9B-Q4_K_M.gguf"), None);
+    }
+
     /// §5: pin to a commit sha, never a floating branch — a saved profile (or
     /// a catalog entry) must not silently change meaning later.
     #[test]

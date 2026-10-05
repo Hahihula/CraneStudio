@@ -142,6 +142,19 @@ async fn proxy(
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, e))?;
 
+    // The model's default thinking level, for clients that don't choose one
+    // (crane-serve only reads it per request).
+    let bytes = match state
+        .registry
+        .spec_for(&model_name)
+        .and_then(|spec| spec.reasoning_effort)
+    {
+        Some(effort) if parts.uri.path().ends_with("/chat/completions") => {
+            with_default_reasoning_effort(&bytes, effort.as_str()).map_or(bytes, Into::into)
+        }
+        _ => bytes,
+    };
+
     let path_and_query = parts
         .uri
         .path_and_query()
@@ -190,6 +203,26 @@ fn forwarded_headers(headers: &HeaderMap) -> HeaderMap {
 fn extract_model_field(body: &[u8]) -> Option<String> {
     let value: serde_json::Value = serde_json::from_slice(body).ok()?;
     value.get("model")?.as_str().map(str::to_string)
+}
+
+/// `body` with a top-level `reasoning_effort` added, or `None` when the client
+/// already chose one — as the top-level request field or through
+/// `chat_template_kwargs`, the two places crane-serve reads it from.
+fn with_default_reasoning_effort(body: &[u8], effort: &str) -> Option<Vec<u8>> {
+    let mut value: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let object = value.as_object_mut()?;
+    let chosen = |v: Option<&serde_json::Value>| v.is_some_and(|v| !v.is_null());
+    if chosen(object.get("reasoning_effort"))
+        || chosen(
+            object
+                .get("chat_template_kwargs")
+                .and_then(|k| k.get("reasoning_effort")),
+        )
+    {
+        return None;
+    }
+    object.insert("reasoning_effort".to_string(), effort.into());
+    serde_json::to_vec(&value).ok()
 }
 
 /// Starts `model_name` if it isn't already running, evicting the
@@ -307,6 +340,31 @@ mod tests {
         unreachable!("this test never starts a model on demand")
     }
 
+    #[test]
+    fn default_reasoning_effort_is_added_only_when_the_client_sets_none() {
+        let added = with_default_reasoning_effort(br#"{"model":"m","messages":[]}"#, "medium")
+            .map(|b| serde_json::from_slice::<serde_json::Value>(&b).unwrap());
+        assert_eq!(added.unwrap()["reasoning_effort"], "medium");
+
+        assert!(
+            with_default_reasoning_effort(br#"{"model":"m","reasoning_effort":"low"}"#, "xhigh")
+                .is_none()
+        );
+        assert!(
+            with_default_reasoning_effort(
+                br#"{"model":"m","chat_template_kwargs":{"reasoning_effort":"low"}}"#,
+                "xhigh"
+            )
+            .is_none()
+        );
+        // An explicit null counts as unset.
+        let added =
+            with_default_reasoning_effort(br#"{"model":"m","reasoning_effort":null}"#, "xhigh")
+                .map(|b| serde_json::from_slice::<serde_json::Value>(&b).unwrap());
+        assert_eq!(added.unwrap()["reasoning_effort"], "xhigh");
+        assert!(with_default_reasoning_effort(b"not json", "xhigh").is_none());
+    }
+
     fn spec(identity: &str, port: u16) -> LaunchSpec {
         LaunchSpec {
             model_path: identity.to_string(),
@@ -325,6 +383,7 @@ mod tests {
             kv_quant: None,
             prefill_chunk: None,
             device: 0,
+            reasoning_effort: None,
         }
     }
 

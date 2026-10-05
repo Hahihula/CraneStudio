@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::http::{StatusCode, header};
+use studio_core::catalog::schema::ReasoningEffort;
 use studio_core::launch::LaunchSpec;
 use studio_gateway::{Daemon, GatewayState};
 use studio_supervisor::{SpawnRequest, Supervisor};
@@ -57,6 +58,7 @@ fn spec(identity: &str, port: u16) -> LaunchSpec {
         kv_quant: None,
         prefill_chunk: None,
         device: 0,
+        reasoning_effort: None,
     }
 }
 
@@ -217,4 +219,46 @@ async fn on_demand_start_of_an_unregistered_model_fails_cleanly() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+}
+
+/// A model registered with a default thinking level gets it on chat requests
+/// that don't choose one, and the client's own choice otherwise.
+#[tokio::test]
+async fn chat_requests_get_the_models_default_reasoning_effort() {
+    let state = test_state();
+    let port = free_port().await;
+    let mut medium = spec("model-m", port);
+    medium.reasoning_effort = Some(ReasoningEffort::Medium);
+    state.registry.register("model-m".to_string(), medium);
+    let addr = spawn_gateway(state.clone()).await;
+
+    let body = forwarded_body(
+        &addr,
+        serde_json::json!({"model": "model-m", "messages": []}),
+    )
+    .await;
+    assert_eq!(body["reasoning_effort"], "medium");
+
+    let body = forwarded_body(
+        &addr,
+        serde_json::json!({"model": "model-m", "reasoning_effort": "low"}),
+    )
+    .await;
+    assert_eq!(body["reasoning_effort"], "low");
+
+    state.daemon.supervisor().stop_all().await;
+}
+
+/// The request body as the fake model server received it.
+async fn forwarded_body(addr: &str, body: serde_json::Value) -> serde_json::Value {
+    let resp: serde_json::Value = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/chat/completions"))
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    serde_json::from_str(resp["echoed_body"].as_str().unwrap()).unwrap()
 }

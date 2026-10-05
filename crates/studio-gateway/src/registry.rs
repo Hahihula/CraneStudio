@@ -171,6 +171,7 @@ mod tests {
             kv_quant: None,
             prefill_chunk: None,
             device: 0,
+            reasoning_effort: None,
         }
     }
 

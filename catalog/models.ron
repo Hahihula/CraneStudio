@@ -29,7 +29,7 @@
 //     cannot load.
 (
     schema_version: 1,
-    updated: "2026-10-03",
+    updated: "2026-10-05",
     models: [
         (
             id: "qwen3.5-0.8b",
@@ -295,7 +295,7 @@
                     download_bytes: 21166757760,
                     // Smoke-tested only (health check + a real chat
                     // completion + a tools round trip) on an RTX 3090 against
-                    // Crane 71e1d9f: ~22 GB VRAM at 8k context, ~67 tok/s
+                    // Crane 322052b: ~22 GB VRAM at 8k context, ~67 tok/s
                     // decode. No depth run yet.
                     measured: {},
                 ),
@@ -346,7 +346,7 @@
                     // Smoke-tested only (health check + a real chat
                     // completion + a tools round trip, also with
                     // CRANE_KV_QUANT=int8) on an RTX 3090 against Crane
-                    // 71e1d9f: ~22 GB VRAM at 8k context, ~65 tok/s decode.
+                    // 322052b: ~22 GB VRAM at 8k context, ~65 tok/s decode.
                     // No depth run yet.
                     measured: {},
                 ),
@@ -399,8 +399,172 @@
                     download_bytes: 15676553472,
                     // Smoke-tested only (health check + a real chat
                     // completion + a tools round trip) on an RTX 3090 against
-                    // Crane 71e1d9f: ~16 GB VRAM at 8k context, ~26 tok/s
+                    // Crane 322052b: ~16 GB VRAM at 8k context, ~26 tok/s
                     // decode. No depth run yet.
+                    measured: {},
+                ),
+            ],
+        ),
+        (
+            id: "thinkingcap-qwen3.8-27b",
+            display_name: "ThinkingCap Qwen 3.8 27B",
+            family: "qwen3_5",
+            // BottleCap AI's fine-tune of Qwen 3.8 27B (dense, `qwen35` GGUF
+            // header) trained to think ~37% shorter at about the base model's
+            // accuracy.
+            model_type: "qwen3_5",
+            params: 27000000000,
+            native_context: 262144,
+            capabilities: [Text, Tools],
+            // Free for personal use and for small businesses; larger
+            // organizations need a commercial license from BottleCap AI.
+            license: "polyform-small-business-1.0.0",
+            gated: false,
+            supports: (
+                isq: true,
+                kv_quant: true,
+                kv_swap: false,
+                vision: false,
+            ),
+            // The stock Qwen 3.8 template already defaults to xhigh; stated
+            // explicitly so the gateway sends it regardless of template.
+            reasoning_effort: Some(Xhigh),
+            variants: [
+                (
+                    id: "thinkingcap-qwen3.8-27b-q4_k_m",
+                    repo: "bottlecapai/ThinkingCap-Qwen3.8-27B-GGUF",
+                    revision: "108ff8f24ce8e9335fbf308844cd3c59c13380a4",
+                    // The repo also ships an mmproj; not downloaded (no
+                    // GGUF/mmproj vision loader, §2.12).
+                    files: ["ThinkingCap-Qwen3.8-27B-Q4_K_M.gguf"],
+                    format: Gguf,
+                    quant: Some("Q4_K_M"),
+                    download_bytes: 17442400352,
+                    // Smoke-tested only (chat + a tools round trip through the
+                    // gateway) on an RTX 3090 against Crane 322052b: ~19 GB
+                    // VRAM at 16k context, ~26 tok/s decode. A request with no
+                    // effort got output identical to an explicit xhigh one.
+                    // No depth run yet.
+                    measured: {},
+                ),
+                (
+                    id: "thinkingcap-qwen3.8-27b-q6_k",
+                    repo: "bottlecapai/ThinkingCap-Qwen3.8-27B-GGUF",
+                    revision: "108ff8f24ce8e9335fbf308844cd3c59c13380a4",
+                    files: ["ThinkingCap-Qwen3.8-27B-Q6_K.gguf"],
+                    format: Gguf,
+                    quant: Some("Q6_K"),
+                    download_bytes: 23860566112,
+                    // PENDING LAUNCH CHECK — same repo/revision as the Q4_K_M
+                    // variant above; needs a 32 GB GPU.
+                    measured: {},
+                ),
+            ],
+        ),
+        (
+            id: "swift-1.5-qwen3.8-27b",
+            display_name: "Swift 1.5 Qwen 3.8 27B",
+            family: "qwen3_5",
+            // UkisAI's reasoning-efficient Qwen 3.8 27B derivative (dense,
+            // `qwen35` GGUF header): ~58% fewer thinking tokens than the base,
+            // benchmarked by its authors at xhigh.
+            model_type: "qwen3_5",
+            params: 27000000000,
+            native_context: 262144,
+            capabilities: [Text, Tools],
+            license: "swift-open-license-1.0",
+            gated: false,
+            supports: (
+                isq: true,
+                kv_quant: true,
+                kv_swap: false,
+                vision: false,
+            ),
+            // Stated explicitly even though the template defaults to xhigh.
+            reasoning_effort: Some(Xhigh),
+            variants: [
+                (
+                    id: "swift-1.5-qwen3.8-27b-q4_k_m",
+                    repo: "ukisai/Swift-1.5-Qwen3.8-27B-GGUF",
+                    revision: "14bfe4b42be4a925d98816db830155f476c605e7",
+                    // The repo also ships an mmproj; not downloaded (no
+                    // GGUF/mmproj vision loader, §2.12).
+                    files: ["Swift-1.5-Qwen3.8-27B-Q4_K_M.gguf"],
+                    format: Gguf,
+                    quant: Some("Q4_K_M"),
+                    download_bytes: 17442399936,
+                    // Smoke-tested only (chat + a tools round trip through the
+                    // gateway) on an RTX 3090 against Crane 322052b: ~19 GB
+                    // VRAM at 16k context, ~28 tok/s decode. A request with no
+                    // effort got output identical to an explicit xhigh one.
+                    // No depth run yet.
+                    measured: {},
+                ),
+                (
+                    id: "swift-1.5-qwen3.8-27b-q6_k",
+                    repo: "ukisai/Swift-1.5-Qwen3.8-27B-GGUF",
+                    revision: "14bfe4b42be4a925d98816db830155f476c605e7",
+                    files: ["Swift-1.5-Qwen3.8-27B-Q6_K.gguf"],
+                    format: Gguf,
+                    quant: Some("Q6_K"),
+                    download_bytes: 23860565696,
+                    // PENDING LAUNCH CHECK — same repo/revision as the Q4_K_M
+                    // variant above; needs a 32 GB GPU.
+                    measured: {},
+                ),
+            ],
+        ),
+        (
+            id: "qwen3.8-27b-pi",
+            display_name: "Qwen 3.8 27B pi",
+            family: "qwen3_5",
+            // bytkim's Qwen 3.8 27B fine-tune for coding in the Pi agent
+            // harness (dense, `qwen35` GGUF header), RL-trained to reason
+            // economically at low and medium effort.
+            model_type: "qwen3_5",
+            params: 27000000000,
+            native_context: 262144,
+            capabilities: [Text, Tools],
+            license: "apache-2.0",
+            gated: false,
+            supports: (
+                isq: true,
+                kv_quant: true,
+                kv_swap: false,
+                vision: false,
+            ),
+            // The template's own default is xhigh; this model is meant to run
+            // at medium, so the gateway sends that unless the client asks
+            // for something else.
+            reasoning_effort: Some(Medium),
+            variants: [
+                (
+                    id: "qwen3.8-27b-pi-q4_k_m",
+                    repo: "bytkim/Qwen3.8-27B-pi-GGUF",
+                    revision: "97caacb971d9246520fa8db5282a06bd36b103df",
+                    // The repo also ships an mmproj; not downloaded (no
+                    // GGUF/mmproj vision loader, §2.12).
+                    files: ["Qwen3.8-27B-pi-Q4_K_M.gguf"],
+                    format: Gguf,
+                    quant: Some("Q4_K_M"),
+                    download_bytes: 16547400704,
+                    // Smoke-tested only (chat + a tools round trip through the
+                    // gateway) on an RTX 3090 against Crane 322052b: ~18 GB
+                    // VRAM at 16k context, ~28 tok/s decode. A request with no
+                    // effort got output identical to an explicit medium one,
+                    // and different from xhigh. No depth run yet.
+                    measured: {},
+                ),
+                (
+                    id: "qwen3.8-27b-pi-q6_k",
+                    repo: "bytkim/Qwen3.8-27B-pi-GGUF",
+                    revision: "97caacb971d9246520fa8db5282a06bd36b103df",
+                    files: ["Qwen3.8-27B-pi-Q6_K.gguf"],
+                    format: Gguf,
+                    quant: Some("Q6_K"),
+                    download_bytes: 22082530304,
+                    // PENDING LAUNCH CHECK — same repo/revision as the Q4_K_M
+                    // variant above; needs a 32 GB GPU.
                     measured: {},
                 ),
             ],
@@ -838,7 +1002,7 @@
                     quant: Some("Q4_K_M"),
                     download_bytes: 1561318368,
                     // Smoke-tested only (health check + a real chat
-                    // completion) on an RTX 3090 against Crane 71e1d9f — no
+                    // completion) on an RTX 3090 against Crane 322052b — no
                     // depth run yet.
                     measured: {},
                 ),
