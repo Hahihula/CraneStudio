@@ -2,7 +2,7 @@
 //! §3.3. Pure — no process spawning here (that's `studio-supervisor`'s job);
 //! this only decides *what* to run.
 
-use crate::catalog::schema::KvQuant;
+use crate::catalog::schema::{KvQuant, ReasoningEffort};
 
 /// Every `--model-type qwen3_5`/`CRANE_ISQ` quantization level Crane
 /// accepts, mirroring `crane-core/src/ops/linear.rs::parse_ggml_dtype`
@@ -82,6 +82,11 @@ pub struct LaunchSpec {
     /// Which GPU this child should see, via `CUDA_VISIBLE_DEVICES` (§2.6) —
     /// not a real multi-GPU capability, just per-child GPU pinning.
     pub device: usize,
+    /// The catalog's default thinking level for this model. crane-serve has
+    /// no flag for it, so it is never in `argv` — the gateway adds it to
+    /// chat requests that don't set their own.
+    #[serde(default)]
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl LaunchSpec {
@@ -198,6 +203,7 @@ mod tests {
             kv_quant: None,
             prefill_chunk: None,
             device: 0,
+            reasoning_effort: None,
         }
     }
 

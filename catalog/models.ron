@@ -20,15 +20,16 @@
 //   * `--quant` (ISQ) is rejected for every model type except `qwen3_5`, so
 //     `supports.isq` is false everywhere else — it isn't a conservative guess,
 //     it's a hard guard in Crane.
-//   * only `qwen3_5`, `minicpm5`, `gemma4` and `hunyuan` have GGUF loaders at
-//     all, and of those only `qwen3_5` and `minicpm5` read the tokenizer
-//     embedded in the GGUF. `qwen3`, `gemma4` and `hunyuan` demand a sibling
+//   * only `qwen3_5`, `qwen4_exp`, `minicpm5`, `gemma4` and `hunyuan` have
+//     GGUF loaders at all (`qwen4_exp` has nothing else), and of those only
+//     `qwen3_5`, `qwen4_exp` and `minicpm5` read the tokenizer embedded in the
+//     GGUF. `qwen3`, `gemma4` and `hunyuan` demand a sibling
 //     `tokenizer.json` that the published GGUF repos don't ship, so those
 //     families are catalogued as safetensors instead of shipping an entry that
 //     cannot load.
 (
     schema_version: 1,
-    updated: "2026-08-28",
+    updated: "2026-10-05",
     models: [
         (
             id: "qwen3.5-0.8b",
@@ -257,6 +258,368 @@
                     quant: Some("Q8_0"),
                     download_bytes: 9786060384,
                     // PENDING LAUNCH CHECK
+                    measured: {},
+                ),
+            ],
+        ),
+        (
+            id: "ornith-1.0-35b-a3b",
+            display_name: "Ornith 1.0 35B-A3B",
+            family: "qwen3_5",
+            // The MoE sibling of Ornith 1.0 9B: `qwen3_5_moe` in config.json
+            // (256 experts, 8 active, ~3B active parameters), `qwen35moe` in
+            // the GGUF header. Crane loads it through the same qwen3_5
+            // backend, which detects experts per layer — hence the plain
+            // `qwen3_5` model type. The repo is named "35B" without the
+            // "-A3B" suffix the 1.5 release uses; the architecture is the same.
+            model_type: "qwen3_5",
+            params: 35000000000,
+            native_context: 262144,
+            capabilities: [Text, Tools],
+            license: "mit",
+            gated: false,
+            supports: (
+                isq: true,
+                kv_quant: true,
+                kv_swap: false,
+                vision: false,
+            ),
+            variants: [
+                (
+                    id: "ornith-1.0-35b-a3b-q4_k_m",
+                    repo: "ornith-ai/Ornith-1.0-35B-GGUF",
+                    revision: "383064f72a1ef3087b779f268d3ca117eb989aac",
+                    files: ["ornith-1.0-35b-Q4_K_M.gguf"],
+                    format: Gguf,
+                    quant: Some("Q4_K_M"),
+                    download_bytes: 21166757760,
+                    // Smoke-tested only (health check + a real chat
+                    // completion + a tools round trip) on an RTX 3090 against
+                    // Crane 322052b: ~22 GB VRAM at 8k context, ~67 tok/s
+                    // decode. No depth run yet.
+                    measured: {},
+                ),
+                (
+                    id: "ornith-1.0-35b-a3b-q8_0",
+                    repo: "ornith-ai/Ornith-1.0-35B-GGUF",
+                    revision: "383064f72a1ef3087b779f268d3ca117eb989aac",
+                    files: ["ornith-1.0-35b-Q8_0.gguf"],
+                    format: Gguf,
+                    quant: Some("Q8_0"),
+                    download_bytes: 36903138880,
+                    // PENDING LAUNCH CHECK — same repo/revision as the Q4_K_M
+                    // variant above; needs a 40 GB+ GPU to hold every expert.
+                    measured: {},
+                ),
+            ],
+        ),
+        (
+            id: "ornith-1.5-35b-a3b",
+            display_name: "Ornith 1.5 35B-A3B",
+            family: "qwen3_5",
+            // Same MoE layout as Ornith 1.0 35B-A3B above (`qwen35moe` GGUF
+            // header, qwen3_5 backend).
+            model_type: "qwen3_5",
+            params: 35000000000,
+            native_context: 262144,
+            capabilities: [Text, Tools],
+            license: "mit",
+            gated: false,
+            supports: (
+                isq: true,
+                kv_quant: true,
+                kv_swap: false,
+                vision: false,
+            ),
+            variants: [
+                (
+                    id: "ornith-1.5-35b-a3b-q4_k_m",
+                    repo: "ornith-ai/Ornith-1.5-35B-A3B-GGUF",
+                    revision: "12393612fd4f730ff5aadc23e9b8f9648aa49ceb",
+                    // The repo also ships `mmproj-Ornith-1.5-35B-BF16.gguf`;
+                    // not downloaded, for the same reason as the 9B above
+                    // (no GGUF/mmproj vision loader, §2.12).
+                    files: ["Ornith-1.5-35B-Q4_K_M.gguf"],
+                    format: Gguf,
+                    quant: Some("Q4_K_M"),
+                    download_bytes: 21713463040,
+                    // Smoke-tested only (health check + a real chat
+                    // completion + a tools round trip, also with
+                    // CRANE_KV_QUANT=int8) on an RTX 3090 against Crane
+                    // 322052b: ~22 GB VRAM at 8k context, ~65 tok/s decode.
+                    // No depth run yet.
+                    measured: {},
+                ),
+                (
+                    id: "ornith-1.5-35b-a3b-q8_0",
+                    repo: "ornith-ai/Ornith-1.5-35B-A3B-GGUF",
+                    revision: "12393612fd4f730ff5aadc23e9b8f9648aa49ceb",
+                    files: ["Ornith-1.5-35B-Q8_0.gguf"],
+                    format: Gguf,
+                    quant: Some("Q8_0"),
+                    download_bytes: 37802149280,
+                    // PENDING LAUNCH CHECK — same repo/revision as the
+                    // smoke-tested Q4_K_M variant above; needs a 40 GB+ GPU.
+                    measured: {},
+                ),
+            ],
+        ),
+        (
+            id: "orcasaq-2-27b-uncensored",
+            display_name: "OrcaSAQ 2 27B Cyber Uncensored",
+            family: "qwen3_5",
+            // An abliterated Qwen 3.8 27B (dense, same hybrid GDN layout as
+            // Qwen 3.5 — `qwen35` GGUF header), quantized with OrcaRouter's
+            // mixed-precision OrcaSAQ2 scheme. Crane runs its IQ4_XS linears
+            // natively.
+            model_type: "qwen3_5",
+            params: 27000000000,
+            native_context: 262144,
+            capabilities: [Text, Tools],
+            license: "apache-2.0",
+            // Gated with automatic approval: accept the terms on the HF page
+            // once, and an HF token is then needed to download.
+            gated: true,
+            supports: (
+                isq: true,
+                kv_quant: true,
+                kv_swap: false,
+                vision: false,
+            ),
+            variants: [
+                (
+                    id: "orcasaq-2-27b-uncensored-orcasaq2",
+                    repo: "orcarouter/OrcaSAQ-2-Cyber-27B-Uncensored-GGUF",
+                    revision: "a0ebe1b5ad5c009cd382908585c04b7e9e0cf0c0",
+                    files: ["OrcaSAQ-2-27B-Uncensored.gguf"],
+                    format: Gguf,
+                    // The only file the repo ships; a per-tensor mixed
+                    // quantization rather than a single llama.cpp type.
+                    quant: Some("OrcaSAQ2"),
+                    download_bytes: 15676553472,
+                    // Smoke-tested only (health check + a real chat
+                    // completion + a tools round trip) on an RTX 3090 against
+                    // Crane 322052b: ~16 GB VRAM at 8k context, ~26 tok/s
+                    // decode. No depth run yet.
+                    measured: {},
+                ),
+            ],
+        ),
+        (
+            id: "thinkingcap-qwen3.8-27b",
+            display_name: "ThinkingCap Qwen 3.8 27B",
+            family: "qwen3_5",
+            // BottleCap AI's fine-tune of Qwen 3.8 27B (dense, `qwen35` GGUF
+            // header) trained to think ~37% shorter at about the base model's
+            // accuracy.
+            model_type: "qwen3_5",
+            params: 27000000000,
+            native_context: 262144,
+            capabilities: [Text, Tools],
+            // Free for personal use and for small businesses; larger
+            // organizations need a commercial license from BottleCap AI.
+            license: "polyform-small-business-1.0.0",
+            gated: false,
+            supports: (
+                isq: true,
+                kv_quant: true,
+                kv_swap: false,
+                vision: false,
+            ),
+            // The stock Qwen 3.8 template already defaults to xhigh; stated
+            // explicitly so the gateway sends it regardless of template.
+            reasoning_effort: Some(Xhigh),
+            variants: [
+                (
+                    id: "thinkingcap-qwen3.8-27b-q4_k_m",
+                    repo: "bottlecapai/ThinkingCap-Qwen3.8-27B-GGUF",
+                    revision: "108ff8f24ce8e9335fbf308844cd3c59c13380a4",
+                    // The repo also ships an mmproj; not downloaded (no
+                    // GGUF/mmproj vision loader, §2.12).
+                    files: ["ThinkingCap-Qwen3.8-27B-Q4_K_M.gguf"],
+                    format: Gguf,
+                    quant: Some("Q4_K_M"),
+                    download_bytes: 17442400352,
+                    // Smoke-tested only (chat + a tools round trip through the
+                    // gateway) on an RTX 3090 against Crane 322052b: ~19 GB
+                    // VRAM at 16k context, ~26 tok/s decode. A request with no
+                    // effort got output identical to an explicit xhigh one.
+                    // No depth run yet.
+                    measured: {},
+                ),
+                (
+                    id: "thinkingcap-qwen3.8-27b-q6_k",
+                    repo: "bottlecapai/ThinkingCap-Qwen3.8-27B-GGUF",
+                    revision: "108ff8f24ce8e9335fbf308844cd3c59c13380a4",
+                    files: ["ThinkingCap-Qwen3.8-27B-Q6_K.gguf"],
+                    format: Gguf,
+                    quant: Some("Q6_K"),
+                    download_bytes: 23860566112,
+                    // PENDING LAUNCH CHECK — same repo/revision as the Q4_K_M
+                    // variant above; needs a 32 GB GPU.
+                    measured: {},
+                ),
+            ],
+        ),
+        (
+            id: "swift-1.5-qwen3.8-27b",
+            display_name: "Swift 1.5 Qwen 3.8 27B",
+            family: "qwen3_5",
+            // UkisAI's reasoning-efficient Qwen 3.8 27B derivative (dense,
+            // `qwen35` GGUF header): ~58% fewer thinking tokens than the base,
+            // benchmarked by its authors at xhigh.
+            model_type: "qwen3_5",
+            params: 27000000000,
+            native_context: 262144,
+            capabilities: [Text, Tools],
+            license: "swift-open-license-1.0",
+            gated: false,
+            supports: (
+                isq: true,
+                kv_quant: true,
+                kv_swap: false,
+                vision: false,
+            ),
+            // Stated explicitly even though the template defaults to xhigh.
+            reasoning_effort: Some(Xhigh),
+            variants: [
+                (
+                    id: "swift-1.5-qwen3.8-27b-q4_k_m",
+                    repo: "ukisai/Swift-1.5-Qwen3.8-27B-GGUF",
+                    revision: "14bfe4b42be4a925d98816db830155f476c605e7",
+                    // The repo also ships an mmproj; not downloaded (no
+                    // GGUF/mmproj vision loader, §2.12).
+                    files: ["Swift-1.5-Qwen3.8-27B-Q4_K_M.gguf"],
+                    format: Gguf,
+                    quant: Some("Q4_K_M"),
+                    download_bytes: 17442399936,
+                    // Smoke-tested only (chat + a tools round trip through the
+                    // gateway) on an RTX 3090 against Crane 322052b: ~19 GB
+                    // VRAM at 16k context, ~28 tok/s decode. A request with no
+                    // effort got output identical to an explicit xhigh one.
+                    // No depth run yet.
+                    measured: {},
+                ),
+                (
+                    id: "swift-1.5-qwen3.8-27b-q6_k",
+                    repo: "ukisai/Swift-1.5-Qwen3.8-27B-GGUF",
+                    revision: "14bfe4b42be4a925d98816db830155f476c605e7",
+                    files: ["Swift-1.5-Qwen3.8-27B-Q6_K.gguf"],
+                    format: Gguf,
+                    quant: Some("Q6_K"),
+                    download_bytes: 23860565696,
+                    // PENDING LAUNCH CHECK — same repo/revision as the Q4_K_M
+                    // variant above; needs a 32 GB GPU.
+                    measured: {},
+                ),
+            ],
+        ),
+        (
+            id: "qwen3.8-27b-pi",
+            display_name: "Qwen 3.8 27B pi",
+            family: "qwen3_5",
+            // bytkim's Qwen 3.8 27B fine-tune for coding in the Pi agent
+            // harness (dense, `qwen35` GGUF header), RL-trained to reason
+            // economically at low and medium effort.
+            model_type: "qwen3_5",
+            params: 27000000000,
+            native_context: 262144,
+            capabilities: [Text, Tools],
+            license: "apache-2.0",
+            gated: false,
+            supports: (
+                isq: true,
+                kv_quant: true,
+                kv_swap: false,
+                vision: false,
+            ),
+            // The template's own default is xhigh; this model is meant to run
+            // at medium, so the gateway sends that unless the client asks
+            // for something else.
+            reasoning_effort: Some(Medium),
+            variants: [
+                (
+                    id: "qwen3.8-27b-pi-q4_k_m",
+                    repo: "bytkim/Qwen3.8-27B-pi-GGUF",
+                    revision: "97caacb971d9246520fa8db5282a06bd36b103df",
+                    // The repo also ships an mmproj; not downloaded (no
+                    // GGUF/mmproj vision loader, §2.12).
+                    files: ["Qwen3.8-27B-pi-Q4_K_M.gguf"],
+                    format: Gguf,
+                    quant: Some("Q4_K_M"),
+                    download_bytes: 16547400704,
+                    // Smoke-tested only (chat + a tools round trip through the
+                    // gateway) on an RTX 3090 against Crane 322052b: ~18 GB
+                    // VRAM at 16k context, ~28 tok/s decode. A request with no
+                    // effort got output identical to an explicit medium one,
+                    // and different from xhigh. No depth run yet.
+                    measured: {},
+                ),
+                (
+                    id: "qwen3.8-27b-pi-q6_k",
+                    repo: "bytkim/Qwen3.8-27B-pi-GGUF",
+                    revision: "97caacb971d9246520fa8db5282a06bd36b103df",
+                    files: ["Qwen3.8-27B-pi-Q6_K.gguf"],
+                    format: Gguf,
+                    quant: Some("Q6_K"),
+                    download_bytes: 22082530304,
+                    // PENDING LAUNCH CHECK — same repo/revision as the Q4_K_M
+                    // variant above; needs a 32 GB GPU.
+                    measured: {},
+                ),
+            ],
+        ),
+        (
+            id: "qwen3.8-flash-next-coder",
+            display_name: "Qwen 3.8 Flash-Next Coder",
+            family: "qwen4_exp",
+            // Qwen4-Exp architecture (`qwen4exp` GGUF header): hybrid GDN +
+            // sparse-indexed attention, hyper-connections, 512 experts
+            // pruned to 256 by ISTA-DASLab's GSQ-RCO Coder release, plus a
+            // per-layer n-gram embedding (PLE) table. Crane loads it from
+            // GGUF only.
+            model_type: "qwen4_exp",
+            // Counted from the GGUF tensor table: the transformer shard. The
+            // second shard's n-gram table (51.2B entries) is a host-side
+            // lookup and isn't counted, matching the model card's convention.
+            params: 65314218880,
+            native_context: 262144,
+            // Crane's tool-call parser is model-agnostic and the chat
+            // template is the Qwen 3.8 one — not yet exercised on this model.
+            capabilities: [Text, Tools],
+            license: "apache-2.0",
+            gated: false,
+            supports: (
+                // `--quant` is qwen3_5-only, and CRANE_KV_QUANT is read only
+                // by the qwen3_5 KV cache.
+                isq: false,
+                kv_quant: false,
+                kv_swap: false,
+                vision: false,
+            ),
+            variants: [
+                (
+                    id: "qwen3.8-flash-next-coder-iq1_m",
+                    repo: "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-Coder-GGUF",
+                    revision: "5348543e0147355ac9cbcb031184a3546350988e",
+                    // Both shards are required: shard 1 (29.6 GB) holds the
+                    // transformer and must sit in VRAM — Crane has no expert
+                    // offload for qwen4_exp, so this needs a 32 GB GPU;
+                    // shard 2 (28.8 GB) is the n-gram table, memory-mapped on
+                    // the host. Crane is given shard 1 and finds shard 2 next
+                    // to it. The launcher sizes VRAM from shard 1 alone,
+                    // which is exactly the resident part.
+                    files: [
+                        "IQ1_M/Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-00001-of-00002.gguf",
+                        "IQ1_M/Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-00002-of-00002.gguf",
+                    ],
+                    format: Gguf,
+                    quant: Some("IQ1_M"),
+                    download_bytes: 58408584928,
+                    // PENDING LAUNCH CHECK — needs a 32 GB GPU (not
+                    // available on the 24 GB reference machine). The GGUF
+                    // header was read over a range request and parses with
+                    // the estimator's metadata mapping.
                     measured: {},
                 ),
             ],
@@ -607,6 +970,75 @@
                     download_bytes: 2171308155,
                     // PENDING LAUNCH CHECK — the unquantized weights, for
                     // comparing quantization loss against the GGUFs above.
+                    measured: {},
+                ),
+            ],
+        ),
+        (
+            id: "minicpm5-2b",
+            display_name: "MiniCPM5 2B",
+            family: "minicpm5",
+            // Same plain-Llama-declaring checkpoint shape as MiniCPM5 1B
+            // above, so `--model-type minicpm5` is set explicitly here too.
+            model_type: "minicpm5",
+            params: 2516756480,
+            native_context: 131072,
+            capabilities: [Text],
+            license: "apache-2.0",
+            gated: false,
+            supports: (
+                isq: false,
+                kv_quant: false,
+                kv_swap: false,
+                vision: false,
+            ),
+            variants: [
+                (
+                    id: "minicpm5-2b-q4_k_m",
+                    repo: "openbmb/MiniCPM5-2B-GGUF",
+                    revision: "2079a22f3beaa4e306449978533478fe0522f4b3",
+                    files: ["MiniCPM5-2B-Q4_K_M.gguf"],
+                    format: Gguf,
+                    quant: Some("Q4_K_M"),
+                    download_bytes: 1561318368,
+                    // Smoke-tested only (health check + a real chat
+                    // completion) on an RTX 3090 against Crane 322052b — no
+                    // depth run yet.
+                    measured: {},
+                ),
+                (
+                    id: "minicpm5-2b-q8_0",
+                    repo: "openbmb/MiniCPM5-2B-GGUF",
+                    revision: "2079a22f3beaa4e306449978533478fe0522f4b3",
+                    files: ["MiniCPM5-2B-Q8_0.gguf"],
+                    format: Gguf,
+                    quant: Some("Q8_0"),
+                    download_bytes: 2679710688,
+                    // Smoke-tested only, as above (~111 tok/s decode). Its
+                    // greedy answer came back with a stray leading
+                    // `</think>` in `content` — the model closing a think
+                    // block the template never opened — so expect that in
+                    // replies.
+                    measured: {},
+                ),
+                (
+                    id: "minicpm5-2b-bf16",
+                    repo: "openbmb/MiniCPM5-2B",
+                    revision: "f97400052a43d642bbc6e9975e2397e3ae6a6b52",
+                    files: [
+                        "chat_template.jinja",
+                        "config.json",
+                        "generation_config.json",
+                        "model-00000-of-00001.safetensors",
+                        "model.safetensors.index.json",
+                        "special_tokens_map.json",
+                        "tokenizer.json",
+                        "tokenizer_config.json",
+                    ],
+                    format: Safetensors,
+                    quant: None,
+                    download_bytes: 5043584039,
+                    // Smoke-tested only, as above.
                     measured: {},
                 ),
             ],

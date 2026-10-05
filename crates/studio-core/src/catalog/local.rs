@@ -88,6 +88,7 @@ fn walk(dir: &Path, depth: usize, out: &mut Vec<LocalCandidate>) {
             && path
                 .extension()
                 .is_some_and(|e| e.eq_ignore_ascii_case("gguf"))
+            && !is_trailing_split_shard(&path)
         {
             out.push(classify_gguf_file(&path));
         }
@@ -110,6 +111,15 @@ fn classify_safetensors_dir(path: &Path) -> LocalCandidate {
         classification,
         linked_root: None,
     }
+}
+
+/// Shards 2..N of a split GGUF carry no architecture header — the model is
+/// launched from shard 1, which stands for the whole set.
+fn is_trailing_split_shard(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .and_then(gguf::split_shard)
+        .is_some_and(|(shard, _)| shard > 1)
 }
 
 /// Mirrors `detect_model_type`'s own precedence: even a standalone `.gguf`
@@ -236,6 +246,25 @@ mod tests {
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].path, path);
         assert_eq!(candidates[0].format, Format::Gguf);
+    }
+
+    #[test]
+    fn a_split_gguf_is_one_candidate_named_by_its_first_shard() {
+        let root = TempDir::new().unwrap();
+        let first = root.path().join("model-00001-of-00002.gguf");
+        write_gguf_with_architecture(&first, "qwen4exp");
+        fs::write(root.path().join("model-00002-of-00002.gguf"), b"ple table").unwrap();
+
+        let candidates = scan(root.path());
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].path, first);
+        assert!(matches!(
+            candidates[0].classification,
+            Classification::Supported {
+                model_type: "qwen4_exp",
+                ..
+            }
+        ));
     }
 
     #[test]

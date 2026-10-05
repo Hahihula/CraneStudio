@@ -279,6 +279,12 @@ fn attempt_launch(app: &mut App) {
     let port = studio_core::launch::pick_free_port(preferred_port, 50);
     let measurement_key = measurement_key_for(app, &config);
     let predicted_bytes = config.predicted.total();
+    let reasoning_effort = app
+        .browser
+        .catalog
+        .as_ref()
+        .and_then(|catalog| catalog.entry_for_path(&candidate.path))
+        .and_then(|entry| entry.reasoning_effort);
     let spec = LaunchSpec {
         model_path: candidate.path.to_string_lossy().to_string(),
         model_type: app.wizard.model_type.clone(),
@@ -296,6 +302,7 @@ fn attempt_launch(app: &mut App) {
         kv_quant: config.kv_quant,
         prefill_chunk: None,
         device: app.wizard.device,
+        reasoning_effort,
     };
 
     // Straight to the ready screen with a "starting" state, rather than
@@ -352,6 +359,7 @@ pub fn launch_tts(app: &mut App, model: &LocalModel) {
         kv_quant: None,
         prefill_chunk: None,
         device,
+        reasoning_effort: None,
     };
 
     app.ready.begin(name.clone(), port, app.gateway_port, true);

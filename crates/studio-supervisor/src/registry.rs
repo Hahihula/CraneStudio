@@ -524,7 +524,7 @@ mod tests {
         std::fs::write(&pidfile, std::process::id().to_string()).unwrap();
 
         let reaped = reap_stale_children(&pidfile);
-        assert!(reaped.is_empty());
+        assert_eq!(reaped, [] as [u32; 0]);
         assert!(!pidfile.exists(), "pidfile should still be cleared");
     }
 }

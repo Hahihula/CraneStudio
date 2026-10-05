@@ -368,6 +368,7 @@ fn build_launch_spec(
         kv_quant: None,
         prefill_chunk: None,
         device: 0,
+        reasoning_effort: None,
     }
 }
 

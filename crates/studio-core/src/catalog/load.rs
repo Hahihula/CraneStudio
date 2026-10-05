@@ -205,6 +205,28 @@ mod tests {
         }
     }
 
+    /// The wizard finds a launched file's default thinking level through
+    /// `entry_for_path`, wherever the file lives.
+    #[test]
+    fn launched_files_resolve_to_their_default_reasoning_effort() {
+        use crate::catalog::schema::ReasoningEffort;
+        let catalog = bundled();
+        let effort = |path: &str| {
+            catalog
+                .entry_for_path(std::path::Path::new(path))
+                .and_then(|m| m.reasoning_effort)
+        };
+        assert_eq!(
+            effort("/m/bytkim/Qwen3.8-27B-pi-GGUF/sha/Qwen3.8-27B-pi-Q4_K_M.gguf"),
+            Some(ReasoningEffort::Medium)
+        );
+        assert_eq!(
+            effort("/elsewhere/Swift-1.5-Qwen3.8-27B-Q4_K_M.gguf"),
+            Some(ReasoningEffort::Xhigh)
+        );
+        assert_eq!(effort("/m/Qwen3.5-9B-Q4_K_M.gguf"), None);
+    }
+
     /// §5: pin to a commit sha, never a floating branch — a saved profile (or
     /// a catalog entry) must not silently change meaning later.
     #[test]
@@ -242,12 +264,28 @@ mod tests {
                             .iter()
                             .filter(|f| has_extension(f, "gguf"))
                             .collect();
-                        assert_eq!(
-                            ggufs.len(),
-                            1,
-                            "{}: a GGUF variant names exactly one .gguf file, got {:?}",
+                        // One .gguf file, or one complete llama.cpp split set
+                        // listed in shard order — the launcher passes
+                        // `files[0]` to Crane, which must be shard 1.
+                        let in_order = ggufs.iter().enumerate().all(|(i, f)| {
+                            crate::catalog::gguf::split_shard(f)
+                                == Some((
+                                    u32::try_from(i + 1).unwrap(),
+                                    u32::try_from(ggufs.len()).unwrap(),
+                                ))
+                        });
+                        assert!(
+                            ggufs.len() == 1 || in_order,
+                            "{}: a GGUF variant names exactly one .gguf file or one \
+                             ordered split set, got {:?}",
                             variant.id,
                             variant.files
+                        );
+                        assert_eq!(
+                            variant.files.first(),
+                            ggufs.first().copied(),
+                            "{}: the model file must come first",
+                            variant.id
                         );
                         assert!(
                             variant.quant.is_some(),
@@ -337,6 +375,9 @@ mod tests {
     ///
     /// Sizes are compared as the sum over a variant's whole file list, which is
     /// what `download_bytes` means and what the progress bar divides by.
+    ///
+    /// Gated repos answer 401 without a token, so they are only checked when
+    /// `HF_TOKEN` is set (with its terms accepted on HF), and skipped otherwise.
     #[tokio::test]
     #[ignore = "hits the real HuggingFace API — not run by default (§12)"]
     async fn every_variant_is_still_downloadable_at_its_pinned_sha() {
@@ -344,9 +385,14 @@ mod tests {
             .timeout(Duration::from_secs(60))
             .build()
             .unwrap();
+        let token = std::env::var("HF_TOKEN").ok().filter(|t| !t.is_empty());
         let mut problems = Vec::new();
 
         for model in bundled().models {
+            if model.gated && token.is_none() {
+                eprintln!("skipping gated {} (HF_TOKEN not set)", model.id);
+                continue;
+            }
             for variant in &model.variants {
                 let mut total = 0u64;
                 // `download_bytes` covers the extra-repo files too — they land in
@@ -363,7 +409,11 @@ mod tests {
                     }));
                 for (repo, revision, file) in all_files {
                     let url = format!("https://huggingface.co/{repo}/resolve/{revision}/{file}");
-                    match client.head(&url).send().await {
+                    let mut request = client.head(&url);
+                    if let Some(token) = &token {
+                        request = request.bearer_auth(token);
+                    }
+                    match request.send().await {
                         Ok(response) if response.status().is_success() => {
                             // LFS files answer with the real size in
                             // `x-linked-size` before the redirect, and with a

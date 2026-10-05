@@ -504,7 +504,7 @@ mod tests {
         // not vague" per §7.4.
         for option in &options {
             assert!(option.saves_bytes > 0, "{option:?}");
-            assert!(!option.description.is_empty());
+            assert_ne!(option.description, "");
         }
         assert!(options.iter().any(|o| o.description.contains("KV cache")));
     }
