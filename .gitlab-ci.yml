@@ -610,6 +610,9 @@ release:gitlab:
     - job: build:linux-cuda
       artifacts: true
       optional: true
+    - job: build:linux-sycl
+      artifacts: true
+      optional: true
     - job: build:macos-metal
       artifacts: true
       optional: true
@@ -639,6 +642,7 @@ release:gitlab:
         echo "|---|---|"
         echo "| \`…-x86_64-linux-cuda.tar.gz\` | Linux with an NVIDIA GPU (driver 525+) |"
         echo "| \`…-x86_64-windows-cuda.zip\` | Windows with an NVIDIA GPU (driver 525+) |"
+        echo "| \`…-x86_64-linux-sycl.tar.gz\` | Linux with an Intel Arc GPU — **experimental**; needs the Intel oneAPI runtime installed in \`/opt/intel/oneapi\` and the Level Zero GPU driver |"
         echo "| \`…-aarch64-macos-metal.tar.gz\` | Apple Silicon Macs |"
         echo "| \`…-x86_64-linux-cpu.tar.gz\` | Linux without a usable GPU — works everywhere, slow on big models |"
         echo "| \`…-x86_64-windows-cpu.zip\` | Windows without a usable GPU |"
@@ -689,7 +693,10 @@ release:gitlab:
 # too — a GitHub release with the identical archives from the identical build.
 release:github:
   stage: release
-  image: alpine:latest
+  # Debian, not alpine: alpine's curl uses c-ares, whose resolver timed out
+  # ("Could not resolve host: api.github.com") on this runner — the same failure
+  # as mirror:github. glibc's resolver does not.
+  image: debian:stable-slim
   tags: [docker]
   needs:
     - job: release:gitlab
@@ -697,7 +704,7 @@ release:github:
   variables:
     GIT_STRATEGY: none
   before_script:
-    - apk add --no-cache curl jq
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends curl jq ca-certificates
   script:
     - |
       set -eu
