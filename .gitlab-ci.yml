@@ -739,7 +739,11 @@ release:github:
 
 mirror:github:
   stage: mirror
-  image: alpine:latest
+  # Debian, not alpine: alpine's git links libcurl built with c-ares, and its
+  # resolver timed out on the push ("Could not resolve host: github.com") right
+  # after the same job's fetch had resolved it. glibc's resolver is what every
+  # other job here uses.
+  image: debian:stable-slim
   tags: [docker]
   # The job is idempotent (force-pushes the same refs), and the runner's DNS
   # occasionally times out mid-job ("Could not resolve host: github.com").
@@ -747,7 +751,7 @@ mirror:github:
     max: 2
     when: script_failure
   before_script:
-    - apk add --no-cache git bash
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends git ca-certificates
   variables:
     GIT_STRATEGY: clone
     GIT_DEPTH: 0
@@ -771,9 +775,23 @@ mirror:github:
     - git fetch --all
 
     - |
+      # The fetch above resolves github.com fine, yet the push has failed with
+      # "Could not resolve host" on this runner. Retry, and on each failure show
+      # what the resolver says through musl (getent) vs. what git's libcurl
+      # (c-ares) did, so the next failure says which layer is broken.
+      push_with_retry() {
+        for attempt in 1 2 3 4 5; do
+          git push "$@" && return 0
+          echo "push attempt ${attempt} failed; resolver state:"
+          grep -v '^#' /etc/resolv.conf || true
+          getent hosts github.com || echo "getent: github.com does not resolve"
+          sleep 15
+        done
+        return 1
+      }
       if [ "$CI_COMMIT_TAG" != "" ]; then
         echo "Processing tag: $CI_COMMIT_TAG"
-        git push "https://${GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git" "refs/tags/$CI_COMMIT_TAG:refs/tags/$CI_COMMIT_TAG" --force
+        push_with_retry "https://${GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git" "refs/tags/$CI_COMMIT_TAG:refs/tags/$CI_COMMIT_TAG" --force
       else
         echo "Processing branch: $CI_COMMIT_REF_NAME"
         git checkout -B $CI_COMMIT_REF_NAME
@@ -810,7 +828,7 @@ mirror:github:
 
         git add README.md
         git commit -m "Update README for GitHub mirror [skip ci]" || true
-        git push "https://${GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git" "$CI_COMMIT_REF_NAME" --force
+        push_with_retry "https://${GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git" "$CI_COMMIT_REF_NAME" --force
       fi
   rules:
     - if: $CI_COMMIT_TAG
