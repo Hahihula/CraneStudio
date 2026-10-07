@@ -451,6 +451,52 @@ build:linux-cuda:
   allow_failure: true
   rules: *build_rules
 
+# Intel oneAPI/SYCL (Arc / Battlemage) — upstream proof-of-concept (§2.5), so
+# this is built and kept as a job artifact but is NOT a release asset yet: the
+# binary links the oneAPI runtime (libsycl, libur, …) dynamically and nothing
+# bundles it the way cuda-libs/ does for CUDA. Needs the self-hosted `sycl`
+# runner (Docker executor with the Arc render node passed through).
+#
+# `--features sycl` still compiles crane-serve's default plain-candle backend
+# alongside (its `default` feature isn't disabled by ours); that is wasted
+# compile time, not a correctness problem — crane-core never binds to it when
+# `sycl` is on.
+build:linux-sycl:
+  stage: build
+  image: intel/oneapi-basekit:latest
+  tags: [sycl]
+  cache: *cargo_cache
+  variables:
+    ASSET_TARGET: "x86_64-linux"
+    ASSET_BACKEND: "sycl"
+    CARGO_FEATURES: "sycl"
+  before_script:
+    - apt-get update -qq
+    # libasound2-dev: TTS Playground playback (see .rust_setup).
+    - apt-get install -y -qq --no-install-recommends curl git ca-certificates build-essential pkg-config libssl-dev libasound2-dev software-properties-common
+    - *rust_setup
+    - . /opt/intel/oneapi/setvars.sh --force >/dev/null
+    - icpx --version | head -1
+  script:
+    - cargo build --release --locked -p cranestudio --features sycl
+    - *smoke
+    - *package
+    # The build above needs only the compiler. Seeing the GPU needs the Level
+    # Zero driver, which the oneAPI image doesn't ship — install it from Intel's
+    # graphics PPA (Ubuntu's own packages predate Battlemage). Informational:
+    # a failure here must not fail a build that succeeded.
+    - |
+      ( add-apt-repository -y ppa:kobuk-team/intel-graphics \
+        && apt-get install -y -qq --no-install-recommends libze-intel-gpu1 libze1 intel-opencl-icd \
+        && sycl-ls ) || echo "WARN: could not list the Intel GPU (driver install or device passthrough)"
+  artifacts:
+    name: "cranestudio-x86_64-linux-sycl"
+    paths:
+      - dist/
+    expire_in: 1 month
+  allow_failure: true
+  rules: *build_rules
+
 build:macos-metal:
   stage: build
   # macOS runners are shell executors — no image, and the toolchain lives on the
@@ -695,6 +741,11 @@ mirror:github:
   stage: mirror
   image: alpine:latest
   tags: [docker]
+  # The job is idempotent (force-pushes the same refs), and the runner's DNS
+  # occasionally times out mid-job ("Could not resolve host: github.com").
+  retry:
+    max: 2
+    when: script_failure
   before_script:
     - apk add --no-cache git bash
   variables:
