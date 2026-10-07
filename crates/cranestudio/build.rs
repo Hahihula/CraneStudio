@@ -1,63 +1,33 @@
-//! `--features sycl` only: bake the out-of-tree SYCL kernel libraries' directories
-//! into the binary as an rpath so it runs straight from `target/release/`.
+//! `--features sycl` only: make the binary find the SYCL kernel libraries that
+//! Crane's build scripts produce (`libcrane_gdn_sycl.so`, `libcandle_sycl.so`).
 //!
-//! Crane's build scripts emit these rpaths with `rustc-link-arg`, which does not
-//! reach a *dependent* binary's link — and `cranestudio` is the binary, not
-//! `crane-serve` — so without this the binary fails at startup with
-//! `libcrane_gdn_sycl.so: cannot open shared object file`. This mirrors Crane's
-//! `build_sycl_rpath.rs` (crane-serve's build script) at the pinned revision.
-//! The rpath points into the build tree, so such a binary is not relocatable.
+//! Crane builds them into its own `OUT_DIR`s, and a dependency's `rustc-link-arg`
+//! does not reach this binary's link, so without help the binary dies at startup
+//! with `libcrane_gdn_sycl.so: cannot open shared object file`. Scanning the build
+//! tree for them from here does not work either: Cargo does not order this build
+//! script after `crane-core`'s, so on a clean build they don't exist yet.
+//!
+//! Instead the binary looks beside itself, in `sycl-libs/` (as `cuda-libs/` does
+//! for CUDA), and whoever packages the build copies the libraries there — see
+//! `build:linux-sycl` in `.gitlab-ci.yml`. That also keeps the result relocatable.
 
-use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::Path;
 
 fn main() {
-    if std::env::var_os("CARGO_FEATURE_SYCL").is_some() {
-        emit_sycl_rpath();
+    if std::env::var_os("CARGO_FEATURE_SYCL").is_none() {
+        return;
     }
-}
-
-fn emit_sycl_rpath() {
-    let Ok(out_dir) = std::env::var("OUT_DIR") else {
-        return;
-    };
-    // .../build/<pkg>-<hash>/out -> .../build, where the dependencies' build
-    // scripts (already run by now) left their `out` directories.
-    let Some(build_root) = Path::new(&out_dir).parent().and_then(Path::parent) else {
-        return;
-    };
-    let Ok(entries) = std::fs::read_dir(build_root) else {
-        return;
-    };
-
-    // Newest first, so a stale OUT_DIR from an earlier build never shadows the
-    // library this build just produced.
-    let mut found: Vec<(SystemTime, PathBuf)> = Vec::new();
-    for entry in entries.flatten() {
-        let dir = entry.path().join("out");
-        for lib in ["libcandle_sycl.so", "libcrane_gdn_sycl.so"] {
-            if let Ok(meta) = std::fs::metadata(dir.join(lib))
-                && !found.iter().any(|(_, p)| *p == dir)
-            {
-                found.push((meta.modified().unwrap_or(UNIX_EPOCH), dir.clone()));
-            }
-        }
-    }
-    found.sort_by_key(|(when, _)| std::cmp::Reverse(*when));
-
     // Old-style DT_RPATH, not DT_RUNPATH: RUNPATH applies only to the object that
     // carries it, while RPATH is also searched for the dependencies of the
     // `dlopen`ed SYCL adapters, which need it.
     println!("cargo::rustc-link-arg-bins=-Wl,--disable-new-dtags");
-    for (_, dir) in found {
-        println!("cargo::rustc-link-arg-bins=-Wl,-rpath,{}", dir.display());
-        println!("cargo::rerun-if-changed={}", dir.display());
-    }
+    println!("cargo::rustc-link-arg-bins=-Wl,-rpath,$ORIGIN/sycl-libs");
     for dir in oneapi_runtime_dirs() {
         println!("cargo::rustc-link-arg-bins=-Wl,-rpath,{dir}");
     }
 }
 
+/// oneAPI runtime directories on the build machine, as Crane's own binaries bake in.
 fn oneapi_runtime_dirs() -> Vec<String> {
     let root = std::env::var("ONEAPI_ROOT").ok().or_else(|| {
         Path::new("/opt/intel/oneapi")

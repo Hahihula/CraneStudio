@@ -213,6 +213,10 @@ check:catalog-live:
       cp -r target/release/cuda-libs "dist/${NAME}/"
       cp target/release/NOTICE-CUDA.txt "dist/${NAME}/" 2>/dev/null || true
     fi
+    # Likewise the SYCL build's kernel libraries (see build:linux-sycl).
+    if [ -d target/release/sycl-libs ]; then
+      cp -r target/release/sycl-libs "dist/${NAME}/"
+    fi
     CRANE_REV=$(grep -m1 '^crane-serve = ' Cargo.toml | sed -n 's/.*rev = "\([^"]*\)".*/\1/p')
     {
       echo "CraneStudio ${VERSION}"
@@ -479,8 +483,16 @@ build:linux-sycl:
     - icpx --version | head -1
   script:
     - cargo build --release --locked -p cranestudio --features sycl
+    # The binary's rpath is $ORIGIN/sycl-libs (crates/cranestudio/build.rs); put
+    # Crane's SYCL kernel libraries there. They are built into crane-core's and
+    # candle-sycl-kernels' OUT_DIRs, so this runs after the build, before the
+    # smoke test and the packaging (which carries sycl-libs/ in the archive).
+    - mkdir -p target/release/sycl-libs
+    - find target/release/build \( -name libcrane_gdn_sycl.so -o -name libcandle_sycl.so \) -exec cp -v {} target/release/sycl-libs/ \;
+    - test "$(ls target/release/sycl-libs | wc -l)" -eq 2
     - *smoke
     - *package
+    - rm -rf target/release/sycl-libs
     # The build above needs only the compiler. Seeing the GPU needs the Level
     # Zero driver, which the oneAPI image doesn't ship — install it from Intel's
     # graphics PPA (Ubuntu's own packages predate Battlemage). Informational:
