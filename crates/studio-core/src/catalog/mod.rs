@@ -6,6 +6,7 @@
 
 pub mod architecture;
 mod classify;
+pub mod drafter;
 pub(crate) mod gguf;
 pub mod hf;
 pub mod load;

@@ -384,6 +384,7 @@ mod tests {
             prefill_chunk: None,
             device: 0,
             reasoning_effort: None,
+            dspark: None,
         }
     }
 

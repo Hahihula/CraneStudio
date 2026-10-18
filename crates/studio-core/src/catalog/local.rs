@@ -80,7 +80,9 @@ fn walk(dir: &Path, depth: usize, out: &mut Vec<LocalCandidate>) {
             // A directory with its own config.json is one candidate, not a
             // subtree to keep descending into.
             if path.join("config.json").is_file() {
-                out.push(classify_safetensors_dir(&path));
+                if !is_drafter_dir(&path) {
+                    out.push(classify_safetensors_dir(&path));
+                }
             } else {
                 subdirs.push(path);
             }
@@ -89,6 +91,7 @@ fn walk(dir: &Path, depth: usize, out: &mut Vec<LocalCandidate>) {
                 .extension()
                 .is_some_and(|e| e.eq_ignore_ascii_case("gguf"))
             && !is_trailing_split_shard(&path)
+            && !is_companion_gguf(&path)
         {
             out.push(classify_gguf_file(&path));
         }
@@ -122,6 +125,78 @@ fn is_trailing_split_shard(path: &Path) -> bool {
         .is_some_and(|(shard, _)| shard > 1)
 }
 
+/// A `DSpark` drafter checkpoint directory — launched alongside its target
+/// model (`catalog::drafter`), never on its own, so not a scan result.
+fn is_drafter_dir(dir: &Path) -> bool {
+    fs::read(dir.join("config.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<ConfigJson>(&bytes).ok())
+        .is_some_and(|config| config.is_drafter())
+}
+
+/// GGUFs that only ever load next to a model: a vision projector
+/// (`mmproj*.gguf`) or a `DSpark` drafter.
+fn is_companion_gguf(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if name.starts_with("mmproj") {
+        return true;
+    }
+    fs::File::open(path)
+        .ok()
+        .and_then(|mut f| gguf::read_architecture(&mut f))
+        .is_some_and(|arch| arch.eq_ignore_ascii_case(classify::DRAFTER_GGUF_ARCHITECTURE))
+}
+
+/// Whether a MiniCPM-V vision projector sits beside `llm_gguf`. The 4.7 LLM
+/// GGUF is a plain `qwen35`/`qwen35moe` file, so this is the only thing that
+/// tells it apart from a text-only Qwen 3.5 — mirrors crane-serve's own
+/// `has_minicpmv_mmproj` (`clip.projector_type` starting with `minicpmv`).
+#[must_use]
+pub fn has_minicpmv_mmproj(llm_gguf: &Path) -> bool {
+    !minicpmv_mmprojs(llm_gguf).is_empty()
+}
+
+/// The MiniCPM-V `mmproj*.gguf` files beside `llm_gguf`, in the order
+/// crane-serve picks from: the full projector before the `-4x` one.
+#[must_use]
+pub fn minicpmv_mmprojs(llm_gguf: &Path) -> Vec<PathBuf> {
+    let Some(entries) = llm_gguf.parent().and_then(|dir| fs::read_dir(dir).ok()) else {
+        return Vec::new();
+    };
+    let mut found: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .is_some_and(|n| n.to_string_lossy().to_lowercase().starts_with("mmproj"))
+                && p.extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("gguf"))
+        })
+        .filter(|p| {
+            fs::File::open(p)
+                .ok()
+                .and_then(|mut f| gguf::read_all_scalars(&mut f))
+                .and_then(|meta| {
+                    meta.get("clip.projector_type")
+                        .and_then(|v| v.as_str().map(str::to_string))
+                })
+                .is_some_and(|t| t.starts_with("minicpmv"))
+        })
+        .collect();
+    found.sort_by_key(|p| {
+        let name = p
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        (name.contains("4x"), name)
+    });
+    found
+}
+
 /// Mirrors `detect_model_type`'s own precedence: even a standalone `.gguf`
 /// *file* is checked against a sibling `config.json` in its parent
 /// directory first (some GGUF repos ship both), before falling back to the
@@ -132,15 +207,38 @@ fn classify_gguf_file(path: &Path) -> LocalCandidate {
         .filter(|p| p.is_file())
         .and_then(|p| read_config_json(&p))
         .or_else(|| classify_from_gguf_header(path))
-        .unwrap_or_else(|| Classification::Unknown {
-            reason: "could not read a GGUF architecture header".to_string(),
-        });
+        .map_or_else(
+            || Classification::Unknown {
+                reason: "could not read a GGUF architecture header".to_string(),
+            },
+            |classification| upgrade_to_minicpm_v(classification, path),
+        );
     let classification = classify::apply_path_hint(classification, &path.to_string_lossy());
     LocalCandidate {
         path: path.to_path_buf(),
         format: Format::Gguf,
         classification,
         linked_root: None,
+    }
+}
+
+/// A Qwen 3.5-architecture GGUF with a MiniCPM-V projector beside it is a
+/// MiniCPM-V 4.7 model, the same call crane-serve's auto-detection makes.
+fn upgrade_to_minicpm_v(classification: Classification, path: &Path) -> Classification {
+    match classification {
+        Classification::Supported {
+            model_type: "qwen3_5",
+            ..
+        } if has_minicpmv_mmproj(path) => super::architecture::FAMILIES
+            .iter()
+            .find(|f| f.model_type == "minicpmv4_6")
+            .map_or(classification, |family| Classification::Supported {
+                model_type: family.model_type,
+                vision: family.vision,
+                gated: family.gated,
+                audio: family.audio,
+            }),
+        other => other,
     }
 }
 
@@ -306,18 +404,68 @@ mod tests {
     }
 
     fn write_gguf_with_architecture(path: &Path, arch: &str) {
+        write_gguf_with_strings(path, &[("general.architecture", arch)]);
+    }
+
+    fn write_gguf_with_strings(path: &Path, kvs: &[(&str, &str)]) {
         let mut buf = Vec::new();
         buf.extend_from_slice(b"GGUF");
         buf.extend_from_slice(&3u32.to_le_bytes());
         buf.extend_from_slice(&0u64.to_le_bytes());
-        buf.extend_from_slice(&1u64.to_le_bytes());
-        let key = "general.architecture";
-        buf.extend_from_slice(&(key.len() as u64).to_le_bytes());
-        buf.extend_from_slice(key.as_bytes());
-        buf.extend_from_slice(&8u32.to_le_bytes());
-        buf.extend_from_slice(&(arch.len() as u64).to_le_bytes());
-        buf.extend_from_slice(arch.as_bytes());
+        buf.extend_from_slice(&(kvs.len() as u64).to_le_bytes());
+        for (key, value) in kvs {
+            buf.extend_from_slice(&(key.len() as u64).to_le_bytes());
+            buf.extend_from_slice(key.as_bytes());
+            buf.extend_from_slice(&8u32.to_le_bytes());
+            buf.extend_from_slice(&(value.len() as u64).to_le_bytes());
+            buf.extend_from_slice(value.as_bytes());
+        }
         fs::write(path, buf).unwrap();
+    }
+
+    /// The MiniCPM-V 4.7 GGUF repo layout: a plain `qwen35` LLM file, its
+    /// `mmproj`, and (in the same repo) a `DSpark` drafter. One candidate —
+    /// the LLM, as MiniCPM-V — not three.
+    #[test]
+    fn a_qwen35_gguf_beside_a_minicpm_v_mmproj_is_minicpm_v() {
+        let root = TempDir::new().unwrap();
+        let dir = root.path().join("MiniCPM-V-4.7-1B-gguf");
+        fs::create_dir_all(&dir).unwrap();
+        write_gguf_with_architecture(&dir.join("MiniCPM-V-4_7-1B-Q8_0.gguf"), "qwen35");
+        write_gguf_with_strings(
+            &dir.join("mmproj-model-f16.gguf"),
+            &[
+                ("general.architecture", "clip"),
+                ("clip.projector_type", "minicpmv4_7"),
+            ],
+        );
+        write_gguf_with_architecture(&dir.join("dspark-MiniCPM-V-4_7-1B-F16.gguf"), "dflash");
+
+        let candidates = scan(root.path());
+        assert_eq!(candidates.len(), 1, "{candidates:?}");
+        assert!(candidates[0].path.ends_with("MiniCPM-V-4_7-1B-Q8_0.gguf"));
+        assert!(matches!(
+            candidates[0].classification,
+            Classification::Supported {
+                model_type: "minicpmv4_6",
+                vision: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_dspark_drafter_dir_is_not_a_candidate() {
+        let root = TempDir::new().unwrap();
+        let dir = root.path().join("MiniCPM-V-4.7-1B-DSpark");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("config.json"),
+            r#"{"model_type": "qwen3", "architectures": ["Qwen3DSparkModel"]}"#,
+        )
+        .unwrap();
+
+        assert!(scan(root.path()).is_empty());
     }
 
     /// `MiniCPM5`'s real ambiguity (§ the `architecture::from_path_name` docs):

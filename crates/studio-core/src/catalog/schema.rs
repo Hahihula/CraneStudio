@@ -1,7 +1,7 @@
 //! Catalog schema, per PLAN.md §8.1. RON on disk (§5) — not JSON, not TOML.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -85,6 +85,32 @@ pub struct ExtraRepo {
     pub files: Vec<String>,
 }
 
+/// A speculative-decoding drafter (`DSpark`) paired with a variant. Unlike
+/// `extra_repos` it lands in its own `<repo>/<revision>/` directory — a
+/// safetensors drafter ships its own `config.json` and `model.safetensors`,
+/// which would overwrite the target's — and is handed to crane-serve as
+/// `--dspark <dir or .gguf>`. Whether it is used is chosen at launch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Drafter {
+    pub repo: String,
+    pub revision: String,
+    pub files: Vec<String>,
+    pub format: Format,
+    pub download_bytes: u64,
+}
+
+impl Drafter {
+    /// What `--dspark` takes: the checkpoint directory, or the `.gguf` in it.
+    #[must_use]
+    pub fn local_path(&self, models_dir: &Path) -> PathBuf {
+        let dir = models_dir.join(&self.repo).join(&self.revision);
+        match (self.format, self.files.first()) {
+            (Format::Gguf, Some(file)) => dir.join(file),
+            _ => dir,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Variant {
     pub id: String,
@@ -97,6 +123,9 @@ pub struct Variant {
     /// Secondary repos pulled into the same directory after `files`.
     #[serde(default)]
     pub extra_repos: Vec<ExtraRepo>,
+    /// Downloaded with the variant; not counted in `download_bytes`.
+    #[serde(default)]
+    pub drafter: Option<Drafter>,
     /// Keyed by backend class, e.g. `"cuda_sm86"`, `"metal_m3"`, `"cpu"`
     /// (§7.3, §13).
     #[serde(default)]
@@ -146,18 +175,28 @@ impl Catalog {
     /// `<repo>/<revision>` the downloader stores it under.
     #[must_use]
     pub fn entry_for_path(&self, path: &Path) -> Option<&ModelEntry> {
+        self.variant_for_path(path).map(|(model, _)| model)
+    }
+
+    /// Like [`Self::entry_for_path`], but also says which variant matched.
+    #[must_use]
+    pub fn variant_for_path(&self, path: &Path) -> Option<(&ModelEntry, &Variant)> {
         let file_name = path.file_name()?;
-        self.models.iter().find(|model| {
-            model.variants.iter().any(|variant| match variant.format {
-                Format::Gguf => variant
-                    .files
-                    .first()
-                    .and_then(|f| Path::new(f).file_name())
-                    .is_some_and(|f| f == file_name),
-                Format::Safetensors => {
-                    path.ends_with(Path::new(&variant.repo).join(&variant.revision))
-                }
-            })
+        self.models.iter().find_map(|model| {
+            model
+                .variants
+                .iter()
+                .find(|variant| match variant.format {
+                    Format::Gguf => variant
+                        .files
+                        .first()
+                        .and_then(|f| Path::new(f).file_name())
+                        .is_some_and(|f| f == file_name),
+                    Format::Safetensors => {
+                        path.ends_with(Path::new(&variant.repo).join(&variant.revision))
+                    }
+                })
+                .map(|variant| (model, variant))
         })
     }
 }
@@ -176,6 +215,7 @@ mod tests {
             quant: None,
             download_bytes: 1,
             extra_repos: Vec::new(),
+            drafter: None,
             measured: HashMap::new(),
         }
     }

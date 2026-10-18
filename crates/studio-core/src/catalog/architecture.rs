@@ -109,12 +109,16 @@ pub const FAMILIES: &[Family] = &[
         audio: false,
     },
     Family {
+        // The whole MiniCPM-V 4.x family: crane-serve loads 4.7 through the
+        // same `MinicpmV46` type (it switches on `config.json`'s
+        // `mrope_mode`), so 4.7 is an alias here, not a family of its own.
         model_type: "minicpmv4_6",
-        config_aliases: &["minicpmv4_6", "minicpmv4.6"],
+        config_aliases: &["minicpmv4_6", "minicpmv4.6", "minicpmv4_7", "minicpmv4.7"],
         // Same hybrid GDN + attention text tower as Qwen 3.5 under
-        // `text_config` (verified live against a real checkpoint) — but
-        // never ships as GGUF (§2.12-style: no mmproj/vision loader for
-        // any GGUF path), so never matched from a header.
+        // `text_config`. 4.7 also ships as GGUF, but its LLM file is a plain
+        // `qwen35`/`qwen35moe` one: only the `mmproj` beside it says it's a
+        // vision model, so it's never matched from a header alone — see
+        // `catalog::local::has_minicpmv_mmproj`.
         gguf_architectures: &[],
         vision: true,
         gated: false,
@@ -305,6 +309,15 @@ mod tests {
         let vl = from_config(Some("minicpmv4_6"), &[], true).unwrap();
         assert_eq!(vl.model_type, "minicpmv4_6");
         assert!(from_config(Some("minicpmv4_6"), &[], false).is_none());
+        let v47 = from_config(Some("minicpmv4_7"), &[], true).unwrap();
+        assert_eq!(v47.model_type, "minicpmv4_6");
+        let by_arch = from_config(
+            None,
+            &["MiniCPMV4_7ForConditionalGeneration".to_string()],
+            true,
+        )
+        .unwrap();
+        assert_eq!(by_arch.model_type, "minicpmv4_6");
     }
 
     #[test]

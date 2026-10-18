@@ -442,6 +442,9 @@ fn catalog_detail(model: &studio_core::catalog::schema::ModelEntry) -> String {
     if model.capabilities.contains(&Capability::Vision) {
         abilities.push("vision");
     }
+    if model.variants.iter().any(|v| v.drafter.is_some()) {
+        abilities.push("dspark");
+    }
     if !abilities.is_empty() {
         parts.push(abilities.join(" + "));
     }

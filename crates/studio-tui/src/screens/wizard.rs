@@ -15,6 +15,7 @@
 )]
 
 use std::fs::File;
+use std::path::{Path, PathBuf};
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Frame;
@@ -45,6 +46,13 @@ const HINTS: &[(&str, &str)] = &[
     ("esc", "back"),
     ("f2", "theme"),
 ];
+const DSPARK_HINTS: &[(&str, &str)] = &[
+    ("↑↓", "choose"),
+    ("d", "dspark on/off"),
+    ("⏎", "start"),
+    ("esc", "back"),
+    ("f2", "theme"),
+];
 
 pub struct State {
     pub candidate: Option<LocalCandidate>,
@@ -55,6 +63,12 @@ pub struct State {
     pub result: Option<SolveResult>,
     pub error: Option<String>,
     pub selected_config: usize,
+    /// The `DSpark` drafter found for this model (MiniCPM-V 4.7 only).
+    pub drafter: Option<PathBuf>,
+    /// Whether this launch speculates with `drafter` — on by default when
+    /// there is one (crane-serve's MiniCPM-V path decodes greedily either
+    /// way, and `DSpark` only changes the speed), `d` turns it off.
+    pub use_dspark: bool,
 }
 
 impl Default for State {
@@ -68,6 +82,8 @@ impl Default for State {
             result: None,
             error: None,
             selected_config: 0,
+            drafter: None,
+            use_dspark: false,
         }
     }
 }
@@ -97,10 +113,41 @@ pub fn load_local(app: &mut App, candidate: &LocalCandidate) {
     app.wizard.variant_label.clone_from(&variant_label);
     app.wizard.backend = app.hardware.backend;
 
+    if *model_type == "minicpmv4_6" {
+        app.wizard.drafter = studio_core::catalog::drafter::find(
+            &candidate.path,
+            candidate.format,
+            app.browser.catalog.as_ref(),
+            &studio_core::paths::models_dir(),
+        );
+        app.wizard.use_dspark = app.wizard.drafter.is_some();
+    }
+
+    replan(app);
+}
+
+/// (Re-)runs the solver for the wizard's current model and `DSpark` choice.
+fn replan(app: &mut App) {
+    let Some(candidate) = app.wizard.candidate.clone() else {
+        return;
+    };
     let (usable_vram, device) = usable_memory(app);
     app.wizard.device = device;
-
-    match plan(candidate, &variant_label, app.hardware.backend, usable_vram) {
+    let drafter = app
+        .wizard
+        .drafter
+        .as_deref()
+        .filter(|_| app.wizard.use_dspark);
+    app.wizard.result = None;
+    app.wizard.error = None;
+    app.wizard.selected_config = 0;
+    match plan(
+        &candidate,
+        &app.wizard.variant_label,
+        drafter,
+        app.hardware.backend,
+        usable_vram,
+    ) {
         Ok(result) => app.wizard.result = Some(result),
         Err(e) => app.wizard.error = Some(e),
     }
@@ -133,20 +180,31 @@ pub fn quick_launch(app: &mut App, model: &LocalModel) {
 }
 
 /// Solves for the best reachable context, given what this machine can spare.
+/// `drafter` is the `DSpark` drafter this launch loads too, if any.
 fn plan(
     candidate: &LocalCandidate,
     variant_label: &str,
+    drafter: Option<&Path>,
     backend: Backend,
     usable_vram: u64,
 ) -> Result<SolveResult, String> {
     let cfg = read_config(candidate)?;
     let weight_bytes = match candidate.format {
-        Format::Gguf => std::fs::metadata(&candidate.path).map_or(0, |m| m.len()),
+        // A MiniCPM-V GGUF also loads the vision projector beside it — the
+        // first one crane-serve would pick.
+        Format::Gguf => {
+            let mmproj = studio_core::catalog::local::minicpmv_mmprojs(&candidate.path)
+                .first()
+                .map_or(0, |p| std::fs::metadata(p).map_or(0, |m| m.len()));
+            std::fs::metadata(&candidate.path).map_or(0, |m| m.len() + mmproj)
+        }
         Format::Safetensors => safetensors_dir_bytes(&candidate.path).unwrap_or(0),
     };
     if weight_bytes == 0 {
         return Err("could not read this model's weight size on disk".to_string());
     }
+    let weight_bytes =
+        weight_bytes + drafter.map_or(0, studio_core::catalog::drafter::loaded_bytes);
 
     let variants = vec![Variant {
         label: variant_label.to_string(),
@@ -203,9 +261,16 @@ fn measurement_key_for(app: &App, config: &SolvedConfig) -> String {
         app.hardware.backend,
         app.hardware.gpus.get(app.wizard.device),
     );
+    // A DSpark launch carries the drafter's memory too, so it's measured
+    // separately from a plain one.
+    let variant = if app.wizard.use_dspark && app.wizard.drafter.is_some() {
+        format!("{}+dspark", app.wizard.variant_label)
+    } else {
+        app.wizard.variant_label.clone()
+    };
     studio_core::measurement::build_key(
         &app.wizard.model_type,
-        &app.wizard.variant_label,
+        &variant,
         config.kv_quant,
         config.context,
         config.concurrency,
@@ -249,6 +314,11 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
         }
         KeyCode::Enter => {
             attempt_launch(app);
+            true
+        }
+        KeyCode::Char('d') if app.wizard.drafter.is_some() => {
+            app.wizard.use_dspark = !app.wizard.use_dspark;
+            replan(app);
             true
         }
         _ => false,
@@ -303,6 +373,12 @@ fn attempt_launch(app: &mut App) {
         prefill_chunk: None,
         device: app.wizard.device,
         reasoning_effort,
+        dspark: app
+            .wizard
+            .drafter
+            .as_ref()
+            .filter(|_| app.wizard.use_dspark)
+            .map(|p| p.to_string_lossy().to_string()),
     };
 
     // Straight to the ready screen with a "starting" state, rather than
@@ -360,6 +436,7 @@ pub fn launch_tts(app: &mut App, model: &LocalModel) {
         prefill_chunk: None,
         device,
         reasoning_effort: None,
+        dspark: None,
     };
 
     app.ready.begin(name.clone(), port, app.gateway_port, true);
@@ -442,7 +519,12 @@ async fn do_launch(
 }
 
 pub fn render(app: &mut App, frame: &mut Frame) {
-    let chrome = Chrome::new(HINTS)
+    let hints = if app.wizard.drafter.is_some() {
+        DSPARK_HINTS
+    } else {
+        HINTS
+    };
+    let chrome = Chrome::new(hints)
         .crumb("Launch options")
         .crumb(crate::ui::text::truncate(&app.wizard.variant_label, 28))
         .status(crate::screens::hardware::status_spans(app))
@@ -500,7 +582,7 @@ fn render_reaches(app: &App, configs: &[SolvedConfig], frame: &mut Frame, area: 
     #[allow(clippy::cast_possible_truncation)]
     let alternatives_height = (configs.len() as u16).saturating_add(2);
     let [headline_area, alternatives_area, _] = Layout::vertical([
-        Constraint::Length(10),
+        Constraint::Length(10 + u16::from(app.wizard.drafter.is_some())),
         Constraint::Length(alternatives_height),
         Constraint::Min(0),
     ])
@@ -686,8 +768,23 @@ fn config_card(
             "sequences",
             format!("{} concurrent", config.concurrency),
         ),
-        Line::raw(""),
     ];
+    if let Some(drafter) = &app.wizard.drafter {
+        let name = drafter
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        lines.push(ui::field(
+            &app.theme,
+            "dspark",
+            if app.wizard.use_dspark {
+                format!("on · {}", crate::ui::text::truncate(&name, 40))
+            } else {
+                "off · press [d] to speculate with the drafter".to_string()
+            },
+        ));
+    }
+    lines.push(Line::raw(""));
 
     let bar_width = width.saturating_sub(34).clamp(10, 30);
     let mut spans = vec![Span::styled(

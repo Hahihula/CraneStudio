@@ -20,16 +20,17 @@
 //   * `--quant` (ISQ) is rejected for every model type except `qwen3_5`, so
 //     `supports.isq` is false everywhere else — it isn't a conservative guess,
 //     it's a hard guard in Crane.
-//   * only `qwen3_5`, `qwen4_exp`, `minicpm5`, `gemma4` and `hunyuan` have
-//     GGUF loaders at all (`qwen4_exp` has nothing else), and of those only
-//     `qwen3_5`, `qwen4_exp` and `minicpm5` read the tokenizer embedded in the
-//     GGUF. `qwen3`, `gemma4` and `hunyuan` demand a sibling
+//   * only `qwen3_5`, `qwen4_exp`, `minicpm5`, `minicpmv4_6` (4.7, with its
+//     `mmproj` beside it), `gemma4` and `hunyuan` have GGUF loaders at all
+//     (`qwen4_exp` has nothing else), and of those only `qwen3_5`,
+//     `qwen4_exp`, `minicpm5` and `minicpmv4_6` read the tokenizer embedded
+//     in the GGUF. `qwen3`, `gemma4` and `hunyuan` demand a sibling
 //     `tokenizer.json` that the published GGUF repos don't ship, so those
 //     families are catalogued as safetensors instead of shipping an entry that
 //     cannot load.
 (
     schema_version: 1,
-    updated: "2026-10-05",
+    updated: "2026-10-18",
     models: [
         (
             id: "qwen3.5-0.8b",
@@ -1290,6 +1291,151 @@
                     download_bytes: 2620969214,
                     // Smoke-tested only (health check + a real vision chat
                     // completion with an actual image) — no depth run yet.
+                    measured: {},
+                ),
+            ],
+        ),
+        (
+            id: "minicpm-v-4.7-1b",
+            display_name: "MiniCPM-V 4.7 1B",
+            family: "minicpmv4_6",
+            // crane-serve loads the whole 4.x family through one type
+            // (`MinicpmV46`), switching on `config.json`'s `mrope_mode` —
+            // `minicpmv4_6` is its canonical `--model-type` spelling.
+            model_type: "minicpmv4_6",
+            params: 1554476272,
+            native_context: 262144,
+            capabilities: [Text, Vision],
+            license: "apache-2.0",
+            gated: false,
+            supports: (
+                isq: false,
+                kv_quant: false,
+                kv_swap: false,
+                vision: true,
+            ),
+            // Every variant carries its DSpark drafter (speculative decoding,
+            // crane-serve `--dspark`): downloaded alongside, switched on or
+            // off at launch. Output is greedy either way — token-identical in
+            // f32, while in bf16 the batched verification can flip a near-tie
+            // (seen in testing: same answer, slightly different wording).
+            // Drafters are paired by quant, as in Crane's own benchmark table.
+            variants: [
+                (
+                    id: "minicpm-v-4.7-1b-q4_k_m",
+                    repo: "openbmb/MiniCPM-V-4.7-1B-gguf",
+                    revision: "9684c734cfb2e6aaccb0bb52ba58afa9aae92d90",
+                    // The mmproj must sit beside the LLM file: it is what
+                    // makes crane-serve load this `qwen35` GGUF as MiniCPM-V.
+                    files: ["MiniCPM-V-4_7-1B-Q4_K_M.gguf", "mmproj-model-f16.gguf"],
+                    format: Gguf,
+                    quant: Some("Q4_K_M"),
+                    download_bytes: 1782121664,
+                    drafter: Some((
+                        repo: "openbmb/MiniCPM-V-4.7-1B-DSpark-gguf",
+                        revision: "aec96428844076f30c45c4e9fe9322d1d9a1aace",
+                        files: ["dspark-MiniCPM-V-4_7-1B-Q4_K_M.gguf"],
+                        format: Gguf,
+                        download_bytes: 133276416,
+                    )),
+                    // Smoke-tested only (a real vision chat completion with
+                    // DSpark on; it falls back to plain decoding on prose, as
+                    // designed) — no depth run yet.
+                    measured: {},
+                ),
+                (
+                    id: "minicpm-v-4.7-1b-q8_0",
+                    repo: "openbmb/MiniCPM-V-4.7-1B-gguf",
+                    revision: "9684c734cfb2e6aaccb0bb52ba58afa9aae92d90",
+                    // The mmproj must sit beside the LLM file: it is what
+                    // makes crane-serve load this `qwen35` GGUF as MiniCPM-V.
+                    files: ["MiniCPM-V-4_7-1B-Q8_0.gguf", "mmproj-model-f16.gguf"],
+                    format: Gguf,
+                    quant: Some("Q8_0"),
+                    download_bytes: 2191635904,
+                    drafter: Some((
+                        repo: "openbmb/MiniCPM-V-4.7-1B-DSpark-gguf",
+                        revision: "aec96428844076f30c45c4e9fe9322d1d9a1aace",
+                        files: ["dspark-MiniCPM-V-4_7-1B-Q8_0.gguf"],
+                        format: Gguf,
+                        download_bytes: 237879552,
+                    )),
+                    // Smoke-tested only: a code prompt ran 1.21 s plain and
+                    // 0.74 s with DSpark (6.2 tokens/round) on an RTX 3090,
+                    // 3.0 / 3.6 GiB VRAM — no depth run yet.
+                    measured: {},
+                ),
+                (
+                    id: "minicpm-v-4.7-1b-bf16",
+                    repo: "openbmb/MiniCPM-V-4.7-1B",
+                    revision: "286817f1132b998913a129a221c89b4402b4ab80",
+                    files: [
+                        "chat_template.jinja",
+                        "config.json",
+                        "generation_config.json",
+                        "model.safetensors",
+                        "preprocessor_config.json",
+                        "processor_config.json",
+                        "tokenizer.json",
+                        "tokenizer_config.json",
+                    ],
+                    format: Safetensors,
+                    quant: None,
+                    download_bytes: 3129066015,
+                    drafter: Some((
+                        repo: "openbmb/MiniCPM-V-4.7-1B-DSpark",
+                        revision: "33762d223b4be1101cf90abba1958435a9b018e0",
+                        files: ["config.json", "model.safetensors"],
+                        format: Safetensors,
+                        download_bytes: 427103435,
+                    )),
+                    // Smoke-tested only: the same code prompt ran 1.92 s plain
+                    // and 0.77 s with DSpark on an RTX 3090, 3.7 / 4.1 GiB
+                    // VRAM — no depth run yet.
+                    measured: {},
+                ),
+            ],
+        ),
+        (
+            id: "minicpm-v-4.7-35b-a3b",
+            display_name: "MiniCPM-V 4.7 35B-A3B",
+            family: "minicpmv4_6",
+            model_type: "minicpmv4_6",
+            params: 35212875824,
+            native_context: 262144,
+            capabilities: [Text, Vision],
+            license: "apache-2.0",
+            gated: false,
+            supports: (
+                isq: false,
+                kv_quant: false,
+                kv_swap: false,
+                vision: true,
+            ),
+            // Q4_K_M only: ~22 GB with its projector is what a 24 GB card can
+            // hold, and the VLM path has no CPU expert offload to fall back on
+            // (Q8_0 is 38 GB, BF16 70 GB).
+            variants: [
+                (
+                    id: "minicpm-v-4.7-35b-a3b-q4_k_m",
+                    repo: "openbmb/MiniCPM-V-4.7-35B-A3B-gguf",
+                    revision: "77ec40de8445999bf3076aeff9ff45d40a2713cc",
+                    // The mmproj must sit beside the LLM file: it is what
+                    // makes crane-serve load this `qwen35` GGUF as MiniCPM-V.
+                    files: ["MiniCPM-V-4_7-35B-A3B-Q4_K_M.gguf", "mmproj-model-f16.gguf"],
+                    format: Gguf,
+                    quant: Some("Q4_K_M"),
+                    download_bytes: 22285830848,
+                    drafter: Some((
+                        repo: "openbmb/MiniCPM-V-4.7-35B-A3B-DSpark-gguf",
+                        revision: "9a6d35b9a7982bfde402a2a91cf46364a3cdcfbd",
+                        files: ["dspark-MiniCPM-V-4_7-35B-A3B-Q4_K_M.gguf"],
+                        format: Gguf,
+                        download_bytes: 237004800,
+                    )),
+                    // Smoke-tested only (a real vision chat completion with
+                    // DSpark on) — peaks at ~23.4 GiB on a 24 GiB RTX 3090,
+                    // so there's little headroom left; no depth run yet.
                     measured: {},
                 ),
             ],

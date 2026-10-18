@@ -87,6 +87,11 @@ pub struct LaunchSpec {
     /// chat requests that don't set their own.
     #[serde(default)]
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// MiniCPM-V 4.7 only: the `DSpark` drafter (checkpoint directory or
+    /// `dspark-*.gguf`) to speculate with, as `--dspark`. `None` decodes
+    /// plainly — the caller sets it only when the user chose `DSpark`.
+    #[serde(default)]
+    pub dspark: Option<String>,
 }
 
 impl LaunchSpec {
@@ -146,6 +151,10 @@ impl LaunchSpec {
         if self.text_only {
             argv.push("--text-only".to_string());
         }
+        if let Some(drafter) = &self.dspark {
+            argv.push("--dspark".to_string());
+            argv.push(drafter.clone());
+        }
         argv
     }
 
@@ -204,6 +213,7 @@ mod tests {
             prefill_chunk: None,
             device: 0,
             reasoning_effort: None,
+            dspark: None,
         }
     }
 
@@ -224,6 +234,16 @@ mod tests {
         assert!(env.contains(&("CUDA_VISIBLE_DEVICES".to_string(), "1".to_string())));
         // Never as CLI args.
         assert!(!spec.argv().iter().any(|a| a.contains("CRANE_KV_QUANT")));
+    }
+
+    #[test]
+    fn dspark_is_passed_only_when_chosen() {
+        let mut spec = minimal_spec();
+        assert!(!spec.argv().iter().any(|a| a == "--dspark"));
+        spec.dspark = Some("/models/MiniCPM-V-4.7-1B-DSpark".to_string());
+        let argv = spec.argv();
+        let at = argv.iter().position(|a| a == "--dspark").unwrap();
+        assert_eq!(argv[at + 1], "/models/MiniCPM-V-4.7-1B-DSpark");
     }
 
     #[test]
