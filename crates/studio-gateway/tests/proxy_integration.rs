@@ -59,6 +59,7 @@ fn spec(identity: &str, port: u16) -> LaunchSpec {
         prefill_chunk: None,
         device: 0,
         reasoning_effort: None,
+        dspark: None,
     }
 }
 

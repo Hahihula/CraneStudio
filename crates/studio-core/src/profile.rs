@@ -33,6 +33,9 @@ pub struct RuntimeConfig {
     pub device: usize,
     pub text_only: bool,
     pub prefill_chunk: Option<usize>,
+    /// The `DSpark` drafter path, when the profile speculates with one.
+    #[serde(default)]
+    pub dspark: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,6 +131,7 @@ mod tests {
                 device: 0,
                 text_only: false,
                 prefill_chunk: None,
+                dspark: None,
             },
             measured: None,
         }

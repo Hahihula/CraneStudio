@@ -35,9 +35,31 @@ pub struct ConfigJson {
     pub vision_config: Option<serde_json::Value>,
 }
 
+/// `general.architecture` of a `DSpark` drafter GGUF.
+pub const DRAFTER_GGUF_ARCHITECTURE: &str = "dflash";
+
+const DRAFTER_REASON: &str = "a DSpark speculative-decoding drafter, not a model on its own — \
+     it is offered when launching the MiniCPM-V 4.7 model it was trained for";
+
 impl ConfigJson {
+    /// A `DSpark` drafter checkpoint. Its `config.json` says `"model_type":
+    /// "qwen3"`, so without this check it would pass as a launchable Qwen3
+    /// — only `architectures` (`Qwen3DSparkModel`) gives it away.
+    #[must_use]
+    pub fn is_drafter(&self) -> bool {
+        self.architectures
+            .iter()
+            .any(|a| a.to_lowercase().contains("dspark"))
+    }
+
     #[must_use]
     pub fn classify(&self) -> Classification {
+        if self.is_drafter() {
+            return Classification::Unsupported {
+                detected: self.architectures.first().cloned(),
+                reason: DRAFTER_REASON.to_string(),
+            };
+        }
         classify_config(
             self.model_type.as_deref().or(self.architecture.as_deref()),
             &self.architectures,
@@ -73,6 +95,12 @@ pub fn classify_config(
 
 #[must_use]
 pub fn classify_gguf_architecture(arch: &str) -> Classification {
+    if arch.eq_ignore_ascii_case(DRAFTER_GGUF_ARCHITECTURE) {
+        return Classification::Unsupported {
+            detected: Some(arch.to_string()),
+            reason: DRAFTER_REASON.to_string(),
+        };
+    }
     match architecture::from_gguf_architecture(arch) {
         Some(family) => Classification::Supported {
             model_type: family.model_type,
@@ -138,6 +166,23 @@ mod tests {
                 vision: false,
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn dspark_drafters_are_not_mistaken_for_qwen3() {
+        let config: ConfigJson = serde_json::from_str(
+            r#"{"model_type": "qwen3", "architectures": ["Qwen3DSparkModel"]}"#,
+        )
+        .unwrap();
+        assert!(config.is_drafter());
+        assert!(matches!(
+            config.classify(),
+            Classification::Unsupported { .. }
+        ));
+        assert!(matches!(
+            classify_gguf_architecture("dflash"),
+            Classification::Unsupported { .. }
         ));
     }
 

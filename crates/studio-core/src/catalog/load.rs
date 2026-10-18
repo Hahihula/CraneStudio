@@ -259,10 +259,12 @@ mod tests {
             for variant in &model.variants {
                 match variant.format {
                     Format::Gguf => {
+                        // A MiniCPM-V vision projector rides along beside
+                        // the model file; it isn't part of the model itself.
                         let ggufs: Vec<_> = variant
                             .files
                             .iter()
-                            .filter(|f| has_extension(f, "gguf"))
+                            .filter(|f| has_extension(f, "gguf") && !f.starts_with("mmproj"))
                             .collect();
                         // One .gguf file, or one complete llama.cpp split set
                         // listed in shard order — the launcher passes
@@ -443,6 +445,39 @@ mod tests {
                         "{}: download_bytes says {} but the files add up to {total}",
                         variant.id, variant.download_bytes
                     ));
+                }
+                // The drafter has its own directory and its own size.
+                if let Some(drafter) = &variant.drafter {
+                    let mut total = 0u64;
+                    for file in &drafter.files {
+                        let url = format!(
+                            "https://huggingface.co/{}/resolve/{}/{file}",
+                            drafter.repo, drafter.revision
+                        );
+                        match client.head(&url).send().await {
+                            Ok(response) if response.status().is_success() => {
+                                total += response
+                                    .headers()
+                                    .get("x-linked-size")
+                                    .and_then(|v| v.to_str().ok())
+                                    .and_then(|v| v.parse::<u64>().ok())
+                                    .or_else(|| response.content_length())
+                                    .unwrap_or(0);
+                            }
+                            Ok(response) => problems.push(format!(
+                                "{} drafter: {file}: HTTP {}",
+                                variant.id,
+                                response.status()
+                            )),
+                            Err(e) => problems.push(format!("{} drafter: {file}: {e}", variant.id)),
+                        }
+                    }
+                    if total != drafter.download_bytes {
+                        problems.push(format!(
+                            "{} drafter: download_bytes says {} but the files add up to {total}",
+                            variant.id, drafter.download_bytes
+                        ));
+                    }
                 }
             }
         }

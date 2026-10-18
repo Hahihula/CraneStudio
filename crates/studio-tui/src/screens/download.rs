@@ -17,7 +17,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use studio_core::catalog::Classification;
 use studio_core::catalog::local::LocalCandidate;
-use studio_core::catalog::schema::{ExtraRepo, Format, ModelEntry};
+use studio_core::catalog::schema::{Drafter, ExtraRepo, Format, ModelEntry};
 use studio_core::download::{CancellationToken, Event, RepoDownload, download_repo};
 
 use crate::app::{App, BackgroundEvent, Screen};
@@ -191,7 +191,10 @@ pub fn start_catalog(app: &mut App, model: &ModelEntry) {
         variant.repo.clone(),
         variant.revision.clone(),
         variant.files.clone(),
-        variant.extra_repos.clone(),
+        Companions {
+            extra_repos: variant.extra_repos.clone(),
+            drafter: variant.drafter.clone(),
+        },
         // Trust the catalog's own verified model_type directly rather than
         // re-classifying the download afterward — some families (MiniCPM5) are
         // deliberately never auto-detected at all (their config/GGUF header is
@@ -215,7 +218,7 @@ pub fn start_hf(app: &mut App, repo_id: &str, gguf_file: &str) {
         repo_id.to_string(),
         "main".to_string(),
         vec![gguf_file.to_string()],
-        Vec::new(),
+        Companions::default(),
         None,
     );
 }
@@ -249,15 +252,28 @@ fn known_candidate(
     })
 }
 
+/// What a catalog variant downloads besides its own files.
+#[derive(Default)]
+struct Companions {
+    /// Merged into the variant's directory.
+    extra_repos: Vec<ExtraRepo>,
+    /// Into a directory of its own (see `Drafter`).
+    drafter: Option<Drafter>,
+}
+
 fn start(
     app: &mut App,
     label: String,
     repo: String,
     revision: String,
     files: Vec<String>,
-    extra_repos: Vec<ExtraRepo>,
+    companions: Companions,
     known: Option<(String, Format)>,
 ) {
+    let Companions {
+        extra_repos,
+        drafter,
+    } = companions;
     let cancel = CancellationToken::new();
     app.download = State {
         label,
@@ -268,7 +284,8 @@ fn start(
     app.screen = Screen::Download;
     app.message = None;
 
-    let dest_dir = studio_core::paths::models_dir().join(&repo).join(&revision);
+    let models_dir = studio_core::paths::models_dir();
+    let dest_dir = models_dir.join(&repo).join(&revision);
     let hf_token =
         studio_core::config::Config::load(&studio_core::paths::config_dir().join("config.ron"))
             .hf_token;
@@ -301,6 +318,20 @@ fn start(
                     break;
                 }
             }
+        }
+
+        // The DSpark drafter goes in its own directory (see `Drafter`); the
+        // launch decides whether to use it.
+        if result.is_ok()
+            && let Some(drafter) = &drafter
+        {
+            let mut req = RepoDownload::new(
+                drafter.repo.clone(),
+                drafter.revision.clone(),
+                models_dir.join(&drafter.repo).join(&drafter.revision),
+            );
+            req.token = request.token.clone();
+            result = download_repo(&client, &req, &drafter.files, &event_tx, &cancel).await;
         }
 
         drop(event_tx);
